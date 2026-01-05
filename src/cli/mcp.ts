@@ -80,6 +80,10 @@ export async function runMcpCommand(options: McpCommandOptions): Promise<void> {
 
   rl.on('line', lineHandler)
 
+  // Output startup message to stderr (not stdout) to avoid mixing with JSON-RPC
+  process.stderr.write(`obsidian.do MCP server starting...\n`)
+  process.stderr.write(`Vault: ${vaultPath}\n`)
+
   // Now do async initialization
   const backend = new FileSystemBackend(vaultPath)
 
@@ -116,6 +120,7 @@ export async function runMcpCommand(options: McpCommandOptions): Promise<void> {
 
   // Mark as initialized and process any pending lines
   initialized = true
+  process.stderr.write(`MCP server ready\n`)
   processNextLine()
 
   // Return a promise that resolves when stdin closes
