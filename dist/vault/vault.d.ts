@@ -1,0 +1,41 @@
+import type { Backend, TFile, TFolder, TAbstractFile } from '../types.js';
+import { Events } from './events.js';
+export declare class Vault extends Events {
+    private backend;
+    private fileCache;
+    private folderCache;
+    private contentCache;
+    private syncScanned;
+    private backendCreatesInProgress;
+    private backendModifiesInProgress;
+    private backendDeletesInProgress;
+    constructor(backend: Backend);
+    private setupBackendListeners;
+    private refreshFileSync;
+    private createTFile;
+    private refreshFile;
+    private syncScanBackend;
+    private ensureRootFolder;
+    private registerFoldersForPath;
+    private buildFolderChildren;
+    getFileByPath(path: string): TFile | null;
+    getAbstractFileByPath(path: string): TAbstractFile | null;
+    private normalizePath;
+    getMarkdownFiles(): TFile[];
+    private rescanBackend;
+    getFiles(): TFile[];
+    getAllLoadedFiles(): TAbstractFile[];
+    getAllFolders(includeRoot?: boolean): TFolder[];
+    read(file: TFile): Promise<string>;
+    cachedRead(file: TFile): Promise<string>;
+    readBinary(file: TFile): Promise<ArrayBuffer>;
+    create(path: string, content: string): Promise<TFile>;
+    modify(file: TFile, content: string): Promise<void>;
+    append(file: TFile, content: string): Promise<void>;
+    process(file: TFile, fn: (content: string) => string): Promise<string>;
+    delete(file: TFile): Promise<void>;
+    trash(file: TFile): Promise<void>;
+    rename(file: TFile, newPath: string): Promise<void>;
+    copy(file: TFile, newPath: string): Promise<TFile>;
+}
+//# sourceMappingURL=vault.d.ts.map

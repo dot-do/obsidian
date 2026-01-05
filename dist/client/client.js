@@ -1,0 +1,901 @@
+import { Vault } from '../vault/vault.js';
+import { MetadataCache } from '../metadata/cache.js';
+import { Graph } from '../graph/graph.js';
+import { SearchEngine } from '../search/engine.js';
+import { MemoryBackend } from '../vault/memory-backend.js';
+import { FileSystemBackend } from '../vault/fs-backend.js';
+import { RestApiBackend } from '../vault/rest-backend.js';
+export class ObsidianClient {
+    vault;
+    metadataCache;
+    graph;
+    search;
+    vaultPath;
+    backend;
+    options;
+    initialized = false;
+    disposed = false;
+    eventListeners = new Map();
+    eventRefs = [];
+    contentCache = new Map();
+    /**
+     * Creates an ObsidianClient.
+     *
+     * @param options - Either ClientOptions (new API with backend type) or ObsidianClientOptions (legacy API with backend instance)
+     *
+     * New API usage:
+     * ```typescript
+     * const client = new ObsidianClient({ backend: 'memory', initialFiles: { 'note.md': '# Note' } })
+     * const client = new ObsidianClient({ backend: 'filesystem', vaultPath: '/path/to/vault' })
+     * const client = new ObsidianClient({ backend: 'rest', restApiUrl: 'http://localhost:3000', restApiKey: 'key' })
+     * ```
+     *
+     * Legacy API usage:
+     * ```typescript
+     * const client = new ObsidianClient({ backend: new MemoryBackend() })
+     * ```
+     */
+    constructor(options) {
+        this.options = options;
+        // Determine if using legacy API (backend is an object instance) or new API (backend is a string type)
+        const isLegacyOptions = this.isLegacyOptions(options);
+        if (isLegacyOptions) {
+            // Legacy API: backend is already provided
+            const legacyOpts = options;
+            if (!legacyOpts.backend) {
+                throw new Error('Backend is required');
+            }
+            this.backend = legacyOpts.backend;
+            this.vaultPath = legacyOpts.vaultPath?.replace(/\/$/, '');
+        }
+        else {
+            // New API: create backend from options
+            const clientOpts = options;
+            this.backend = this.createBackend(clientOpts);
+            this.vaultPath = clientOpts.vaultPath?.replace(/\/$/, '');
+        }
+        // Initialize components
+        this.vault = new Vault(this.backend);
+        this.metadataCache = new MetadataCache(this.vault);
+        this.graph = new Graph(this.metadataCache);
+        // Create search adapter
+        const searchEngine = new SearchEngine(this.vault, this.metadataCache);
+        this.search = {
+            searchContent: async (query) => {
+                const results = await searchEngine.search(query);
+                return results.map(r => ({
+                    file: r.file,
+                    score: r.score,
+                    matches: r.matches.flatMap(m => m.positions.map(p => [p, query.length]))
+                }));
+            },
+            searchFiles: async (query) => {
+                const files = this.vault.getMarkdownFiles();
+                const results = [];
+                for (const file of files) {
+                    const queryLower = query.toLowerCase();
+                    const fileNameLower = file.name.toLowerCase();
+                    const basenameLower = file.basename.toLowerCase();
+                    if (fileNameLower.includes(queryLower) || basenameLower.includes(queryLower)) {
+                        const score = basenameLower === queryLower ? 100 :
+                            basenameLower.startsWith(queryLower) ? 80 : 50;
+                        results.push({ file, score });
+                    }
+                }
+                return results.sort((a, b) => b.score - a.score);
+            }
+        };
+        // Set up event forwarding from vault
+        this.setupEventForwarding();
+    }
+    /**
+     * Check if options are legacy format (with backend instance)
+     */
+    isLegacyOptions(options) {
+        const backend = options.backend;
+        // Legacy options have backend as an object instance (not a string type)
+        return backend !== undefined && typeof backend === 'object' && backend !== null;
+    }
+    /**
+     * Create a backend based on the options.
+     * Supports filesystem, memory, and REST API backends.
+     */
+    createBackend(options) {
+        // If no backend type specified, require vaultPath for filesystem or error
+        if (!options.backend) {
+            if (options.vaultPath) {
+                return new FileSystemBackend(options.vaultPath);
+            }
+            // No backend type and no vaultPath - error
+            throw new Error('Backend is required');
+        }
+        switch (options.backend) {
+            case 'memory':
+                return new MemoryBackend(options.initialFiles);
+            case 'rest':
+                if (!options.restApiUrl) {
+                    throw new Error('restApiUrl is required for REST backend');
+                }
+                if (!options.restApiKey) {
+                    throw new Error('restApiKey is required for REST backend');
+                }
+                return new RestApiBackend(options.restApiUrl, options.restApiKey);
+            case 'filesystem':
+                if (!options.vaultPath) {
+                    throw new Error('vaultPath is required for filesystem backend');
+                }
+                return new FileSystemBackend(options.vaultPath);
+            default:
+                throw new Error(`Unknown backend type: ${options.backend}`);
+        }
+    }
+    setupEventForwarding() {
+        // Forward vault events
+        const vaultEvents = ['create', 'modify', 'delete', 'rename'];
+        for (const eventName of vaultEvents) {
+            const ref = this.vault.on(eventName, (data) => {
+                if (!this.disposed && typeof this.trigger === 'function') {
+                    this.trigger(eventName, data);
+                }
+            });
+            this.eventRefs.push(ref);
+        }
+        // Forward metadata cache events
+        const cacheRef = this.metadataCache.on('changed', (data) => {
+            if (!this.disposed && typeof this.trigger === 'function') {
+                this.trigger('changed', data);
+            }
+        });
+        this.eventRefs.push(cacheRef);
+    }
+    // Alias for metadataCache
+    get cache() {
+        return this.metadataCache;
+    }
+    // Initialization method - loads all files and builds caches
+    async initialize() {
+        if (this.initialized) {
+            return;
+        }
+        // Initialize the metadata cache (which also initializes vault file list)
+        await this.metadataCache.initialize();
+        // Populate content cache for sync operations
+        const files = this.vault.getMarkdownFiles();
+        for (const file of files) {
+            try {
+                const content = await this.vault.read(file);
+                this.contentCache.set(file.path, content);
+            }
+            catch {
+                // Ignore errors during initialization
+            }
+        }
+        this.initialized = true;
+    }
+    // Legacy init alias for backwards compatibility
+    async init() {
+        return this.initialize();
+    }
+    ensureInitialized() {
+        if (!this.initialized) {
+            throw new Error('Client not initialized. Call initialize() first.');
+        }
+    }
+    ensureNotDisposed() {
+        if (this.disposed) {
+            throw new Error('Client has been disposed');
+        }
+    }
+    // Get a note with all its metadata and backlinks
+    async getNote(path) {
+        this.ensureInitialized();
+        this.ensureNotDisposed();
+        const file = this.vault.getFileByPath(path);
+        if (!file) {
+            throw new Error(`File not found: ${path}`);
+        }
+        if (file.extension !== 'md') {
+            throw new Error(`Not a markdown file: ${path}`);
+        }
+        const content = await this.vault.read(file);
+        const metadata = this.metadataCache.getFileCache(file);
+        // Get backlinks
+        const backlinkPaths = this.graph.getBacklinks(path);
+        const backlinks = [];
+        for (const blPath of backlinkPaths) {
+            const blFile = this.vault.getFileByPath(blPath);
+            if (blFile) {
+                backlinks.push(blFile);
+            }
+        }
+        return {
+            file,
+            content,
+            metadata,
+            backlinks
+        };
+    }
+    // Create a new note with optional frontmatter
+    async createNote(path, content, frontmatter) {
+        this.ensureInitialized();
+        this.ensureNotDisposed();
+        // Normalize path
+        const normalizedPath = path.replace(/\/+/g, '/');
+        // Check if file exists
+        if (this.vault.getFileByPath(normalizedPath)) {
+            throw new Error(`File already exists: ${normalizedPath}`);
+        }
+        // Build content with frontmatter
+        let finalContent = content;
+        if (frontmatter && Object.keys(frontmatter).length > 0) {
+            const yamlContent = this.serializeYaml(frontmatter);
+            finalContent = `---\n${yamlContent}---\n\n${content}`;
+        }
+        // Create the file (vault.create will trigger the 'create' event which we forward)
+        const file = await this.vault.create(normalizedPath, finalContent);
+        // Index the new file (will be auto-indexed by metadataCache listening to vault events)
+        // but we do it explicitly to ensure it's indexed before returning
+        await this.metadataCache.indexFile(file);
+        // Re-resolve links from files that have unresolved links pointing to this new file
+        await this.resolveLinksToNewFile(file);
+        return file;
+    }
+    // Re-resolve links from files that have unresolved links that might now resolve to a newly created file
+    async resolveLinksToNewFile(newFile) {
+        const unresolvedLinks = this.metadataCache.unresolvedLinks;
+        const basename = newFile.basename.toLowerCase();
+        const filesToReindex = [];
+        for (const [sourcePath, links] of Object.entries(unresolvedLinks)) {
+            for (const link of Object.keys(links)) {
+                // Normalize link for comparison (like we do in getFirstLinkpathDest)
+                const normalizedLink = link.toLowerCase().replace(/[\s_-]+/g, '');
+                const normalizedBasename = basename.replace(/[\s_-]+/g, '');
+                // Check if this unresolved link might match the new file
+                if (normalizedLink === normalizedBasename ||
+                    normalizedLink === newFile.path.replace(/\.md$/, '').toLowerCase() ||
+                    normalizedLink === newFile.name.toLowerCase()) {
+                    const sourceFile = this.vault.getFileByPath(sourcePath);
+                    if (sourceFile && !filesToReindex.some(f => f.path === sourcePath)) {
+                        filesToReindex.push(sourceFile);
+                    }
+                }
+            }
+        }
+        // Re-index files that had unresolved links
+        for (const file of filesToReindex) {
+            await this.metadataCache.indexFile(file);
+        }
+    }
+    /**
+     * Serialize an object to YAML frontmatter string.
+     * This is the method specified in task obsidian-4y2.
+     */
+    serializeFrontmatter(obj) {
+        return this.serializeYaml(obj);
+    }
+    serializeYaml(obj) {
+        const lines = [];
+        for (const [key, value] of Object.entries(obj)) {
+            lines.push(this.serializeYamlValue(key, value, 0));
+        }
+        return lines.join('\n') + '\n';
+    }
+    serializeYamlValue(key, value, indent) {
+        const prefix = '  '.repeat(indent);
+        if (value === null || value === undefined) {
+            return `${prefix}${key}: null`;
+        }
+        if (value instanceof Date) {
+            return `${prefix}${key}: ${value.toISOString()}`;
+        }
+        if (typeof value === 'boolean' || typeof value === 'number') {
+            return `${prefix}${key}: ${value}`;
+        }
+        if (typeof value === 'string') {
+            // Check if string needs quoting
+            if (value.includes(':') || value.includes('"') || value.includes('\n') || value.includes('#')) {
+                // Use quoted string
+                const escaped = value.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+                return `${prefix}${key}: "${escaped}"`;
+            }
+            return `${prefix}${key}: ${value}`;
+        }
+        if (Array.isArray(value)) {
+            if (value.length === 0) {
+                return `${prefix}${key}: []`;
+            }
+            // Check if array contains simple values
+            const allSimple = value.every(v => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean');
+            if (allSimple) {
+                const items = value.map(v => typeof v === 'string' ? v : String(v)).join(', ');
+                return `${prefix}${key}: [${items}]`;
+            }
+            // Complex array
+            const arrayLines = [`${prefix}${key}:`];
+            for (const item of value) {
+                if (typeof item === 'object' && item !== null) {
+                    arrayLines.push(`${prefix}  -`);
+                    for (const [k, v] of Object.entries(item)) {
+                        arrayLines.push(this.serializeYamlValue(k, v, indent + 2));
+                    }
+                }
+                else {
+                    arrayLines.push(`${prefix}  - ${item}`);
+                }
+            }
+            return arrayLines.join('\n');
+        }
+        if (typeof value === 'object') {
+            const objLines = [`${prefix}${key}:`];
+            for (const [k, v] of Object.entries(value)) {
+                objLines.push(this.serializeYamlValue(k, v, indent + 1));
+            }
+            return objLines.join('\n');
+        }
+        return `${prefix}${key}: ${value}`;
+    }
+    // Update the content of an existing note
+    async updateNote(path, content) {
+        this.ensureInitialized();
+        this.ensureNotDisposed();
+        const file = this.vault.getFileByPath(path);
+        if (!file) {
+            throw new Error(`File not found: ${path}`);
+        }
+        // vault.modify will trigger the 'modify' event which we forward
+        await this.vault.modify(file, content);
+        // Re-index the file (will be auto-indexed by metadataCache listening to vault events)
+        // but we do it explicitly to ensure it's indexed before returning
+        await this.metadataCache.indexFile(file);
+    }
+    // Update just the frontmatter of a note, preserving content
+    async updateFrontmatter(path, frontmatter) {
+        this.ensureInitialized();
+        this.ensureNotDisposed();
+        const file = this.vault.getFileByPath(path);
+        if (!file) {
+            throw new Error(`File not found: ${path}`);
+        }
+        const content = await this.vault.read(file);
+        const existingMetadata = this.metadataCache.getFileCache(file);
+        // Parse existing frontmatter
+        const existingFrontmatter = existingMetadata?.frontmatter || {};
+        // Merge frontmatter
+        const mergedFrontmatter = { ...existingFrontmatter };
+        for (const [key, value] of Object.entries(frontmatter)) {
+            if (value === undefined) {
+                delete mergedFrontmatter[key];
+            }
+            else {
+                mergedFrontmatter[key] = value;
+            }
+        }
+        // Extract body content (after frontmatter)
+        let bodyContent = content;
+        if (existingMetadata?.frontmatterPosition) {
+            const endOffset = existingMetadata.frontmatterPosition.end.offset;
+            bodyContent = content.substring(endOffset).replace(/^[\r\n]+/, '');
+        }
+        // Build new content
+        let newContent;
+        if (Object.keys(mergedFrontmatter).length > 0) {
+            const yamlContent = this.serializeYaml(mergedFrontmatter);
+            newContent = `---\n${yamlContent}---\n\n${bodyContent}`;
+        }
+        else {
+            newContent = bodyContent;
+        }
+        await this.vault.modify(file, newContent);
+        // Re-index the file
+        await this.metadataCache.indexFile(file);
+    }
+    // Get file context with metadata and neighbors
+    getFileContext(file) {
+        this.ensureInitialized();
+        // Synchronously index this file if needed
+        // This uses the internal cache check which should be already populated by ensureAllFilesIndexed
+        const metadata = this.metadataCache.getFileCache(file);
+        // Get outgoing links
+        const outlinks = this.graph.getOutlinks(file.path);
+        // Get backlinks
+        const backlinks = this.graph.getBacklinks(file.path);
+        // Combine and dedupe, excluding self
+        const neighborPaths = new Set();
+        for (const path of [...outlinks, ...backlinks]) {
+            if (path !== file.path) {
+                neighborPaths.add(path);
+            }
+        }
+        const neighbors = [];
+        for (const path of neighborPaths) {
+            const neighborFile = this.vault.getFileByPath(path);
+            if (neighborFile) {
+                neighbors.push(neighborFile);
+            }
+        }
+        return { file, metadata, neighbors };
+    }
+    // Async version of getFileContext that ensures indexing is complete
+    async getFileContextAsync(file) {
+        this.ensureInitialized();
+        await this.ensureAllFilesIndexed();
+        return this.getFileContext(file);
+    }
+    // Ensure all files in the vault are indexed in the metadata cache
+    // Public so tests can call this after writing files directly to backend
+    async ensureAllFilesIndexed() {
+        const files = this.vault.getMarkdownFiles();
+        for (const file of files) {
+            if (!this.metadataCache.getFileCache(file)) {
+                await this.metadataCache.indexFile(file);
+            }
+        }
+    }
+    // Force re-index all files, including those already cached
+    // This is needed to properly resolve links when target files are created after source files
+    async reindex() {
+        const files = this.vault.getMarkdownFiles();
+        for (const file of files) {
+            await this.metadataCache.indexFile(file);
+        }
+    }
+    // Generate context for a note (async version)
+    async generateContext(pathOrFile, options) {
+        this.ensureInitialized();
+        // Ensure all files are indexed for proper link resolution
+        await this.ensureAllFilesIndexed();
+        const depth = options?.depth ?? 0; // Default depth is 0
+        const maxTokens = options?.maxTokens;
+        // Handle both string path and TFile
+        let file;
+        let path;
+        if (typeof pathOrFile === 'string') {
+            path = pathOrFile;
+            file = this.vault.getFileByPath(path);
+            if (!file) {
+                throw new Error(`File not found: ${path}`);
+            }
+        }
+        else {
+            file = pathOrFile;
+            path = file.path;
+            // Verify file exists
+            const existingFile = this.vault.getFileByPath(path);
+            if (!existingFile) {
+                throw new Error(`File not found: ${path}`);
+            }
+        }
+        const visitedPaths = new Set();
+        let context = await this.generateNoteContext(file, visitedPaths, depth, maxTokens);
+        // Handle maxTokens truncation
+        if (maxTokens && context.length > maxTokens * 4) {
+            context = this.truncateContext(context, maxTokens);
+        }
+        return context;
+    }
+    async generateNoteContext(file, visitedPaths, remainingDepth, maxTokens) {
+        if (visitedPaths.has(file.path)) {
+            return '';
+        }
+        visitedPaths.add(file.path);
+        const content = await this.vault.cachedRead(file);
+        const metadata = this.metadataCache.getFileCache(file);
+        const sections = [];
+        // Add source file path
+        sections.push(`## Source: ${file.path}`);
+        sections.push('');
+        // Add frontmatter if present
+        if (metadata?.frontmatter) {
+            sections.push('### Metadata');
+            sections.push('---');
+            for (const [key, value] of Object.entries(metadata.frontmatter)) {
+                if (Array.isArray(value)) {
+                    sections.push(`${key}: [${value.join(', ')}]`);
+                }
+                else {
+                    sections.push(`${key}: ${value}`);
+                }
+            }
+            sections.push('---');
+            sections.push('');
+        }
+        // Add content
+        sections.push('### Content');
+        sections.push(content);
+        sections.push('');
+        // Get outgoing links
+        const outlinks = this.graph.getOutlinks(file.path);
+        if (outlinks.length > 0) {
+            sections.push('### Links');
+            for (const link of outlinks) {
+                const linkFile = this.vault.getFileByPath(link);
+                sections.push(`- ${linkFile ? link : `${link} (unresolved)`}`);
+            }
+            sections.push('');
+        }
+        // Get backlinks
+        const backlinks = this.graph.getBacklinks(file.path);
+        if (backlinks.length > 0) {
+            sections.push('### Backlinks');
+            for (const backlink of backlinks) {
+                sections.push(`- ${backlink}`);
+            }
+            sections.push('');
+        }
+        let context = sections.join('\n');
+        // Include linked notes if depth > 0
+        if (remainingDepth > 0) {
+            const linkedPaths = [...new Set([...outlinks, ...backlinks])];
+            for (const linkedPath of linkedPaths) {
+                if (visitedPaths.has(linkedPath)) {
+                    continue;
+                }
+                const linkedFile = this.vault.getFileByPath(linkedPath);
+                if (linkedFile) {
+                    const linkedContext = await this.generateNoteContext(linkedFile, visitedPaths, remainingDepth - 1, maxTokens);
+                    if (linkedContext) {
+                        context += '\n---\n\n' + linkedContext;
+                    }
+                }
+            }
+        }
+        return context;
+    }
+    truncateContext(context, maxTokens) {
+        // Approximate: 1 token ~= 4 characters
+        const maxChars = maxTokens * 4;
+        if (context.length <= maxChars) {
+            return context;
+        }
+        // Find a good breakpoint
+        let truncateIndex = maxChars;
+        const lastNewline = context.lastIndexOf('\n', truncateIndex);
+        if (lastNewline > maxChars * 0.8) {
+            truncateIndex = lastNewline;
+        }
+        return context.substring(0, truncateIndex) + '\n\n... (truncated)';
+    }
+    // Generate context for notes matching a query
+    async generateContextForQuery(query, options) {
+        this.ensureInitialized();
+        // Ensure all files are indexed for proper search
+        await this.ensureAllFilesIndexed();
+        const maxNotes = options?.maxNotes ?? 10;
+        const maxTokens = options?.maxTokens;
+        // Search for matching files
+        const searchEngine = new SearchEngine(this.vault, this.metadataCache);
+        const results = await searchEngine.search(query, { limit: maxNotes });
+        if (results.length === 0) {
+            return `No notes found matching: ${query}`;
+        }
+        const sections = [];
+        sections.push(`# Context for query: "${query}"`);
+        sections.push('');
+        for (const result of results) {
+            const content = await this.vault.cachedRead(result.file);
+            const metadata = this.metadataCache.getFileCache(result.file);
+            sections.push(`## ${result.file.path}`);
+            sections.push('');
+            // Add metadata if present
+            if (metadata?.frontmatter) {
+                sections.push('---');
+                for (const [key, value] of Object.entries(metadata.frontmatter)) {
+                    if (Array.isArray(value)) {
+                        sections.push(`${key}: [${value.join(', ')}]`);
+                    }
+                    else {
+                        sections.push(`${key}: ${value}`);
+                    }
+                }
+                sections.push('---');
+                sections.push('');
+            }
+            sections.push(content);
+            sections.push('');
+        }
+        let context = sections.join('\n');
+        // Handle maxTokens truncation
+        if (maxTokens && context.length > maxTokens * 4) {
+            context = this.truncateContext(context, maxTokens);
+        }
+        return context;
+    }
+    // Generate context for notes with a specific tag
+    async generateContextForTag(tag) {
+        return this.generateContextForTags([tag], false);
+    }
+    // Generate context for notes with all specified tags
+    async generateContextForTags(tags, requireAll = true) {
+        this.ensureInitialized();
+        // Ensure all files are indexed for proper tag search
+        await this.ensureAllFilesIndexed();
+        const searchEngine = new SearchEngine(this.vault, this.metadataCache);
+        const matchingFiles = tags.length === 1
+            ? searchEngine.findByTag(tags[0])
+            : this.findByMultipleTags(tags, requireAll);
+        if (matchingFiles.length === 0) {
+            return `No notes found with tags: ${tags.join(', ')}`;
+        }
+        const sections = [];
+        sections.push(`# Context for tags: ${tags.join(', ')}`);
+        sections.push('');
+        for (const file of matchingFiles) {
+            const content = await this.vault.cachedRead(file);
+            const metadata = this.metadataCache.getFileCache(file);
+            sections.push(`## ${file.path}`);
+            sections.push('');
+            // Add metadata if present
+            if (metadata?.frontmatter) {
+                sections.push('---');
+                for (const [key, value] of Object.entries(metadata.frontmatter)) {
+                    if (Array.isArray(value)) {
+                        sections.push(`${key}: [${value.join(', ')}]`);
+                    }
+                    else {
+                        sections.push(`${key}: ${value}`);
+                    }
+                }
+                sections.push('---');
+                sections.push('');
+            }
+            sections.push(content);
+            sections.push('');
+        }
+        return sections.join('\n');
+    }
+    findByMultipleTags(tags, requireAll) {
+        const files = this.vault.getMarkdownFiles();
+        const matchingFiles = [];
+        // Normalize tags
+        const normalizedTags = tags.map(t => t.startsWith('#') ? t.slice(1).toLowerCase() : t.toLowerCase());
+        for (const file of files) {
+            const metadata = this.metadataCache.getFileCache(file);
+            const fileTags = this.getFileTags(file, metadata);
+            const matches = requireAll
+                ? normalizedTags.every(tag => fileTags.some(ft => ft.toLowerCase() === tag))
+                : normalizedTags.some(tag => fileTags.some(ft => ft.toLowerCase() === tag));
+            if (matches) {
+                matchingFiles.push(file);
+            }
+        }
+        return matchingFiles;
+    }
+    getFileTags(file, metadata) {
+        const tags = [];
+        // Get frontmatter tags
+        if (metadata?.frontmatter?.tags) {
+            const fmTags = metadata.frontmatter.tags;
+            if (Array.isArray(fmTags)) {
+                tags.push(...fmTags.map(t => String(t)));
+            }
+            else if (typeof fmTags === 'string') {
+                tags.push(fmTags);
+            }
+        }
+        // Get inline tags
+        if (metadata?.tags) {
+            for (const tagCache of metadata.tags) {
+                const tag = tagCache.tag.startsWith('#') ? tagCache.tag.slice(1) : tagCache.tag;
+                tags.push(tag);
+            }
+        }
+        return tags;
+    }
+    async getVaultContext(options) {
+        return this.getContext(options);
+    }
+    async getContext(options) {
+        this.ensureInitialized();
+        const context = {};
+        if (options.scope === 'summary') {
+            context.summary = await this.generateVaultSummary();
+            context.tagCloud = this.getTagCloud();
+            context.graphStats = this.graph.getStats();
+        }
+        if (options.scope === 'recent') {
+            context.recentNotes = this.getRecentNotes();
+        }
+        if (options.scope === 'related' && options.focus) {
+            context.relatedNotes = this.getRelatedNotes(options.focus);
+        }
+        return context;
+    }
+    async generateVaultSummary() {
+        const files = this.vault.getMarkdownFiles();
+        const stats = this.graph.getStats();
+        return `Vault contains ${files.length} notes with ${stats.totalEdges} links.`;
+    }
+    getTagCloud() {
+        const tagCounts = {};
+        const files = this.vault.getMarkdownFiles();
+        for (const file of files) {
+            const metadata = this.metadataCache.getFileCache(file);
+            const fileTags = this.getFileTags(file, metadata);
+            for (const tag of fileTags) {
+                tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+            }
+        }
+        return tagCounts;
+    }
+    getRecentNotes() {
+        const files = this.vault.getMarkdownFiles();
+        return files.sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, 10);
+    }
+    getRelatedNotes(focus) {
+        const neighbors = this.graph.getNeighbors(focus);
+        return neighbors;
+    }
+    // Event handling
+    on(event, callback) {
+        if (!this.eventListeners.has(event)) {
+            this.eventListeners.set(event, new Set());
+        }
+        this.eventListeners.get(event).add(callback);
+        return {
+            unsubscribe: () => {
+                this.eventListeners.get(event)?.delete(callback);
+            }
+        };
+    }
+    off(event, ref) {
+        ref.unsubscribe();
+    }
+    trigger(event, data) {
+        const listeners = this.eventListeners.get(event);
+        if (listeners) {
+            for (const callback of listeners) {
+                callback(data);
+            }
+        }
+    }
+    // Path utilities
+    getAbsolutePath(relativePath) {
+        if (!this.vaultPath) {
+            return relativePath;
+        }
+        return `${this.vaultPath}/${relativePath}`;
+    }
+    getRelativePath(absolutePath) {
+        if (!this.vaultPath || !absolutePath.startsWith(this.vaultPath)) {
+            return absolutePath;
+        }
+        return absolutePath.substring(this.vaultPath.length + 1);
+    }
+    // Batch operations
+    async batchCreate(items) {
+        this.ensureInitialized();
+        this.ensureNotDisposed();
+        const files = [];
+        for (const item of items) {
+            const file = await this.createNote(item.path, item.content, item.frontmatter);
+            files.push(file);
+        }
+        return files;
+    }
+    async batchUpdate(items) {
+        this.ensureInitialized();
+        this.ensureNotDisposed();
+        for (const item of items) {
+            await this.updateNote(item.path, item.content);
+        }
+    }
+    // Vault statistics
+    getVaultStats() {
+        this.ensureInitialized();
+        const files = this.vault.getMarkdownFiles();
+        let totalLinks = 0;
+        let totalTags = 0;
+        let totalSize = 0;
+        for (const file of files) {
+            totalSize += file.stat.size;
+            const metadata = this.metadataCache.getFileCache(file);
+            if (metadata) {
+                totalLinks += (metadata.links?.length || 0);
+                totalTags += (metadata.tags?.length || 0);
+            }
+        }
+        return {
+            totalNotes: files.length,
+            totalLinks,
+            totalTags,
+            totalSize
+        };
+    }
+    // Lifecycle management
+    dispose() {
+        if (this.disposed) {
+            return;
+        }
+        // Clean up event listeners
+        this.eventListeners.clear();
+        // Unsubscribe from forwarded events
+        for (const ref of this.eventRefs) {
+            ref.unsubscribe();
+        }
+        this.eventRefs = [];
+        this.disposed = true;
+    }
+}
+/**
+ * Parse frontmatter from markdown content.
+ * Returns the frontmatter object or null if no frontmatter exists.
+ */
+export function parseFrontmatter(content) {
+    if (!content.startsWith('---'))
+        return null;
+    const endMatch = content.slice(3).match(/\n---(\n|$)/);
+    if (!endMatch)
+        return null;
+    const yamlContent = content.slice(4, 3 + endMatch.index);
+    try {
+        return parseYamlSimple(yamlContent);
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * Get the content of a markdown file without the frontmatter.
+ */
+export function getContentWithoutFrontmatter(content) {
+    if (!content.startsWith('---'))
+        return content;
+    const endMatch = content.slice(3).match(/\n---(\n|$)/);
+    if (!endMatch)
+        return content;
+    const endIndex = 3 + endMatch.index + endMatch[0].length;
+    return content.substring(endIndex).replace(/^\n+/, '');
+}
+/**
+ * Simple YAML parser for frontmatter.
+ */
+function parseYamlSimple(yamlContent) {
+    const lines = yamlContent.split('\n');
+    const result = {};
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        if (!trimmed)
+            continue;
+        const colonIndex = trimmed.indexOf(':');
+        if (colonIndex > 0) {
+            const key = trimmed.slice(0, colonIndex).trim();
+            const valueStr = trimmed.slice(colonIndex + 1).trim();
+            if (valueStr.startsWith('[') && valueStr.endsWith(']')) {
+                // Inline array
+                const arrayContent = valueStr.slice(1, -1);
+                result[key] = arrayContent.split(',').map(v => parseYamlValue(v.trim()));
+            }
+            else if (valueStr === '') {
+                // Check for array or nested object
+                result[key] = null;
+            }
+            else {
+                result[key] = parseYamlValue(valueStr);
+            }
+        }
+    }
+    return result;
+}
+/**
+ * Parse a single YAML value.
+ */
+function parseYamlValue(value) {
+    if (value === 'true')
+        return true;
+    if (value === 'false')
+        return false;
+    if (value === 'null' || value === '~')
+        return null;
+    // Check for quoted string
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+        return value.slice(1, -1);
+    }
+    // Check for number
+    const num = Number(value);
+    if (!isNaN(num) && value !== '')
+        return num;
+    return value;
+}
+//# sourceMappingURL=client.js.map
