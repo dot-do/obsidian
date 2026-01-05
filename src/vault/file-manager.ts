@@ -389,11 +389,21 @@ export class FileManager {
 
     // Chain promises to handle concurrent modifications
     if (existingLock) {
-      const newLock = existingLock.then(processWithLock)
+      const newLock = existingLock.then(processWithLock).finally(() => {
+        // Clean up lock if this is the current one
+        if (this.frontmatterLock.get(file.path) === newLock) {
+          this.frontmatterLock.delete(file.path)
+        }
+      })
       this.frontmatterLock.set(file.path, newLock)
       await newLock
     } else {
-      const newLock = processWithLock()
+      const newLock = processWithLock().finally(() => {
+        // Clean up lock if this is the current one
+        if (this.frontmatterLock.get(file.path) === newLock) {
+          this.frontmatterLock.delete(file.path)
+        }
+      })
       this.frontmatterLock.set(file.path, newLock)
       await newLock
     }

@@ -9,7 +9,12 @@ export class FileSystemBackend implements Backend {
   constructor(private basePath: string) {}
 
   private resolvePath(filePath: string): string {
-    return path.join(this.basePath, filePath)
+    const resolved = path.resolve(this.basePath, filePath)
+    const normalizedBase = path.resolve(this.basePath)
+    if (!resolved.startsWith(normalizedBase + path.sep) && resolved !== normalizedBase) {
+      throw new Error('Path traversal detected: path escapes vault root')
+    }
+    return resolved
   }
 
   async read(filePath: string): Promise<string> {

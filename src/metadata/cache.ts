@@ -69,11 +69,6 @@ export class Events {
   }
 }
 
-/**
- * Parser function type for parsing markdown content into metadata
- */
-export type MarkdownParser = (content: string) => CachedMetadata
-
 export class MetadataCache extends Events {
   private cache = new Map<string, CachedMetadata>()
   private contentHashes = new Map<string, string>()
@@ -88,10 +83,7 @@ export class MetadataCache extends Events {
   resolvedLinks: Record<string, Record<string, number>> = {}
   unresolvedLinks: Record<string, Record<string, number>> = {}
 
-  constructor(
-    private vault: Vault,
-    private parser: MarkdownParser = (content: string) => this.parseContent(content)
-  ) {
+  constructor(private vault: Vault) {
     super()
     this.setupVaultListeners()
   }
@@ -174,25 +166,6 @@ export class MetadataCache extends Events {
           const metadata = this.cache.get(sourcePath)
           if (metadata) {
             // Update link tracking - the link will now be unresolved
-            this.updateLinkTracking(sourcePath, metadata)
-          }
-        }
-      }
-    }
-  }
-
-  private updateLinksToRenamedFile(oldPath: string, newPath: string): void {
-    // Find all files that have resolved links to the old path
-    // and update their link tracking
-    for (const [sourcePath, targets] of Object.entries(this.resolvedLinks)) {
-      if (targets[oldPath]) {
-        // This file had a resolved link to the old path
-        // Re-index it to update link status
-        const file = this.vault.getFileByPath(sourcePath)
-        if (file) {
-          const metadata = this.cache.get(sourcePath)
-          if (metadata) {
-            // Update link tracking
             this.updateLinkTracking(sourcePath, metadata)
           }
         }

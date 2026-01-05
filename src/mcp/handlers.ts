@@ -136,10 +136,28 @@ function serializeYamlValue(key: string, value: unknown): string {
   return `${key}: ${value}`
 }
 
+// Helper to check if path is safe (no path traversal)
+function isPathSafe(filePath: string): boolean {
+  // Reject empty paths
+  if (!filePath) return false
+
+  // Reject absolute paths
+  if (filePath.startsWith('/') || /^[a-zA-Z]:/.test(filePath)) return false
+
+  // Reject parent directory references
+  const segments = filePath.split(/[/\\]/)
+  if (segments.includes('..')) return false
+
+  return true
+}
+
 // Helper to validate path
 function validatePath(path: string): void {
   if (!path || path.trim() === '') {
     throw new Error('Path cannot be empty')
+  }
+  if (!isPathSafe(path)) {
+    throw new Error('Path contains invalid traversal patterns')
   }
 }
 
@@ -209,8 +227,8 @@ export interface SearchResult {
   matches: SearchMatch[]
 }
 
-export async function handleVaultSearch(client: ObsidianClient, args: { query: string; filter?: { tags?: string[] } }): Promise<SearchResult> {
-  const { query, filter } = args
+export async function handleVaultSearch(client: ObsidianClient, args: { query: string; limit?: number; filter?: { tags?: string[] } }): Promise<SearchResult> {
+  const { query, limit, filter } = args
 
   // Validate query
   if (!query || query.trim() === '') {
@@ -219,7 +237,8 @@ export async function handleVaultSearch(client: ObsidianClient, args: { query: s
 
   const files = client.vault.getMarkdownFiles()
   const matches: SearchMatch[] = []
-  const MAX_RESULTS = 50
+  // Use provided limit or default to 50
+  const maxResults = limit ?? 50
 
   for (const file of files) {
     try {
@@ -265,7 +284,7 @@ export async function handleVaultSearch(client: ObsidianClient, args: { query: s
   matches.sort((a, b) => b.score - a.score)
 
   // Limit results
-  return { matches: matches.slice(0, MAX_RESULTS) }
+  return { matches: matches.slice(0, maxResults) }
 }
 
 export interface NoteReadResult {
@@ -461,8 +480,34 @@ export interface VaultContextResult {
   graph?: { edges: Array<{ source: string; target: string }> }
 }
 
-export async function handleVaultContext(client: ObsidianClient, args: { scope: string }): Promise<VaultContextResult> {
-  const { scope } = args
+// Helper to estimate tokens from text (rough approximation: ~4 chars per token)
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4)
+}
+
+// Helper to truncate files array to fit within token limit
+function truncateFilesToTokenLimit(
+  files: Array<FileInfo & { path: string }>,
+  maxTokens: number
+): Array<FileInfo & { path: string }> {
+  let currentTokens = 0
+  const result: Array<FileInfo & { path: string }> = []
+
+  for (const file of files) {
+    // Estimate tokens for this file entry (path + metadata structure)
+    const fileTokens = estimateTokens(JSON.stringify(file))
+    if (currentTokens + fileTokens > maxTokens) {
+      break
+    }
+    currentTokens += fileTokens
+    result.push(file)
+  }
+
+  return result
+}
+
+export async function handleVaultContext(client: ObsidianClient, args: { scope: string; maxTokens?: number }): Promise<VaultContextResult> {
+  const { scope, maxTokens } = args
 
   if (!scope || scope.trim() === '' || scope !== scope.trim()) {
     throw new Error('Invalid scope')
@@ -500,8 +545,11 @@ export async function handleVaultContext(client: ObsidianClient, args: { scope: 
       }
     }
 
+    // Apply token limit if specified
+    const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos
+
     return {
-      files: fileInfos,
+      files: truncatedFiles,
       folders: Array.from(folders).sort(),
       stats: { totalNotes: files.length },
       graph: { edges },
@@ -516,24 +564,27 @@ export async function handleVaultContext(client: ObsidianClient, args: { scope: 
       throw new Error(`Folder not found: ${folderPath}`)
     }
 
-    return {
-      files: filteredFiles.map(f => ({
-        path: f.path,
-        metadata: {
-          frontmatter: client.metadataCache.getCache(f.path)?.frontmatter as Record<string, unknown> | undefined,
-        },
-      })),
-    }
+    const fileInfos = filteredFiles.map(f => ({
+      path: f.path,
+      metadata: {
+        frontmatter: client.metadataCache.getCache(f.path)?.frontmatter as Record<string, unknown> | undefined,
+      },
+    }))
+
+    // Apply token limit if specified
+    const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos
+
+    return { files: truncatedFiles }
   }
 
   if (scope.startsWith('tag:')) {
     const tagName = scope.slice(4)
-    const filteredFiles: Array<FileInfo & { path: string }> = []
+    const fileInfos: Array<FileInfo & { path: string }> = []
 
     for (const file of files) {
       const metadata = client.metadataCache.getCache(file.path)
       if (hasAllTags(metadata, [tagName])) {
-        filteredFiles.push({
+        fileInfos.push({
           path: file.path,
           metadata: {
             frontmatter: metadata?.frontmatter as Record<string, unknown> | undefined,
@@ -542,7 +593,10 @@ export async function handleVaultContext(client: ObsidianClient, args: { scope: 
       }
     }
 
-    return { files: filteredFiles }
+    // Apply token limit if specified
+    const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos
+
+    return { files: truncatedFiles }
   }
 
   if (scope.startsWith('recent:')) {
@@ -554,14 +608,17 @@ export async function handleVaultContext(client: ObsidianClient, args: { scope: 
       .filter(f => now - f.stat.mtime < durationMs)
       .sort((a, b) => b.stat.mtime - a.stat.mtime)
 
-    return {
-      files: recentFiles.map(f => ({
-        path: f.path,
-        metadata: {
-          frontmatter: client.metadataCache.getCache(f.path)?.frontmatter as Record<string, unknown> | undefined,
-        },
-      })),
-    }
+    const fileInfos = recentFiles.map(f => ({
+      path: f.path,
+      metadata: {
+        frontmatter: client.metadataCache.getCache(f.path)?.frontmatter as Record<string, unknown> | undefined,
+      },
+    }))
+
+    // Apply token limit if specified
+    const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos
+
+    return { files: truncatedFiles }
   }
 
   if (scope.startsWith('linked:')) {
@@ -587,11 +644,11 @@ export async function handleVaultContext(client: ObsidianClient, args: { scope: 
       linkedPaths.add(blPath)
     }
 
-    const linkedFiles: Array<FileInfo & { path: string }> = []
+    const fileInfos: Array<FileInfo & { path: string }> = []
     for (const linkedPath of linkedPaths) {
       const linkedFile = client.vault.getFileByPath(linkedPath)
       if (linkedFile) {
-        linkedFiles.push({
+        fileInfos.push({
           path: linkedFile.path,
           metadata: {
             frontmatter: client.metadataCache.getCache(linkedPath)?.frontmatter as Record<string, unknown> | undefined,
@@ -600,7 +657,10 @@ export async function handleVaultContext(client: ObsidianClient, args: { scope: 
       }
     }
 
-    return { files: linkedFiles }
+    // Apply token limit if specified
+    const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos
+
+    return { files: truncatedFiles }
   }
 
   throw new Error(`Invalid scope: ${scope}`)

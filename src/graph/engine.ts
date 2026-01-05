@@ -40,68 +40,106 @@ export interface ForwardLink {
  */
 export class GraphEngine {
   private contentCache = new Map<string, string>()
+  private backlinkIndex: Map<string, Set<string>> | null = null
 
   constructor(private cache: MetadataCache) {}
 
   /**
+   * Invalidate the backlink index (call when links change)
+   */
+  invalidateBacklinkIndex(): void {
+    this.backlinkIndex = null
+  }
+
+  /**
+   * Get or build the backlink index for O(1) backlink lookups
+   */
+  private getBacklinkIndex(): Map<string, Set<string>> {
+    if (!this.backlinkIndex) {
+      this.backlinkIndex = this.buildBacklinkIndex()
+    }
+    return this.backlinkIndex
+  }
+
+  /**
+   * Build the inverted index: target -> set of source files
+   */
+  private buildBacklinkIndex(): Map<string, Set<string>> {
+    const index = new Map<string, Set<string>>()
+    const resolvedLinks = this.cache.resolvedLinks
+
+    for (const [source, targets] of Object.entries(resolvedLinks)) {
+      for (const target of Object.keys(targets)) {
+        if (!index.has(target)) {
+          index.set(target, new Set())
+        }
+        index.get(target)!.add(source)
+      }
+    }
+
+    return index
+  }
+
+  /**
    * Get all backlinks pointing to a specific file path.
    * Returns simplified backlink info with source file and link positions.
+   * Uses an inverted index for O(1) lookup of source files.
    *
    * @param path - The target file path to find backlinks for
    * @returns Array of Backlink objects, each containing the source file and link positions
    */
   getBacklinks(path: string): Backlink[] {
     const backlinks: Backlink[] = []
-    const resolvedLinks = this.cache.resolvedLinks
+    const index = this.getBacklinkIndex()
+    const sourcePaths = index.get(path)
 
-    // Iterate through all source files that have resolved links
-    for (const sourcePath in resolvedLinks) {
+    if (!sourcePaths) {
+      return backlinks
+    }
+
+    // Iterate only through source files that link to this target (O(1) lookup)
+    for (const sourcePath of sourcePaths) {
       // Skip self-references
       if (sourcePath === path) continue
 
-      const targets = resolvedLinks[sourcePath]
+      // Get the metadata for the source file to extract link details
+      const sourceMetadata = this.cache.getCache(sourcePath)
 
-      // Check if this source file links to our target path
-      if (targets && targets[path] && targets[path] > 0) {
-        // Get the metadata for the source file to extract link details
-        const sourceMetadata = this.cache.getCache(sourcePath)
+      if (sourceMetadata && sourceMetadata.links) {
+        // Find all links in the source that point to our target
+        const linksToTarget: LinkPosition[] = []
 
-        if (sourceMetadata && sourceMetadata.links) {
-          // Find all links in the source that point to our target
-          const linksToTarget: LinkPosition[] = []
+        for (const linkCache of sourceMetadata.links) {
+          // Resolve the link to check if it points to our target
+          const resolved = this.cache.getFirstLinkpathDest(linkCache.link, sourcePath)
 
-          for (const linkCache of sourceMetadata.links) {
-            // Resolve the link to check if it points to our target
-            const resolved = this.cache.getFirstLinkpathDest(linkCache.link, sourcePath)
-
-            if (resolved && resolved.path === path) {
-              linksToTarget.push({
-                link: linkCache.link,
-                position: {
-                  line: linkCache.position.start.line,
-                  col: linkCache.position.start.col
-                }
-              })
-            }
-          }
-
-          if (linksToTarget.length > 0) {
-            // Sort links by position (line, then col)
-            linksToTarget.sort((a, b) => {
-              if (a.position.line !== b.position.line) {
-                return a.position.line - b.position.line
+          if (resolved && resolved.path === path) {
+            linksToTarget.push({
+              link: linkCache.link,
+              position: {
+                line: linkCache.position.start.line,
+                col: linkCache.position.start.col
               }
-              return a.position.col - b.position.col
-            })
-
-            // Create TFile object for the source
-            const sourceFile = this.createTFileFromPath(sourcePath)
-
-            backlinks.push({
-              file: sourceFile,
-              links: linksToTarget
             })
           }
+        }
+
+        if (linksToTarget.length > 0) {
+          // Sort links by position (line, then col)
+          linksToTarget.sort((a, b) => {
+            if (a.position.line !== b.position.line) {
+              return a.position.line - b.position.line
+            }
+            return a.position.col - b.position.col
+          })
+
+          // Create TFile object for the source
+          const sourceFile = this.createTFileFromPath(sourcePath)
+
+          backlinks.push({
+            file: sourceFile,
+            links: linksToTarget
+          })
         }
       }
     }
@@ -112,42 +150,47 @@ export class GraphEngine {
   /**
    * Get extended backlinks with full LinkCache metadata and surrounding context.
    * This is useful for displaying backlink previews in a UI.
+   * Uses an inverted index for O(1) lookup of source files.
    *
    * @param path - The target file path to find backlinks for
    * @returns Array of BacklinkResult objects with full link metadata and context strings
    */
   getBacklinksWithContext(path: string): BacklinkResult[] {
     const results: BacklinkResult[] = []
-    const { resolvedLinks } = this.cache
+    const index = this.getBacklinkIndex()
+    const sourcePaths = index.get(path)
 
-    for (const [sourcePath, targets] of Object.entries(resolvedLinks)) {
+    if (!sourcePaths) {
+      return results
+    }
+
+    // Iterate only through source files that link to this target (O(1) lookup)
+    for (const sourcePath of sourcePaths) {
       // Skip self-references
       if (sourcePath === path) continue
 
-      if (targets[path]) {
-        const sourceFile = this.getFileByPath(sourcePath)
-        const metadata = this.cache.getCache(sourcePath)
+      const sourceFile = this.getFileByPath(sourcePath)
+      const metadata = this.cache.getCache(sourcePath)
 
-        if (sourceFile && metadata?.links) {
-          const relevantLinks = metadata.links.filter(
-            l => this.cache.getFirstLinkpathDest(l.link, sourcePath)?.path === path
-          )
+      if (sourceFile && metadata?.links) {
+        const relevantLinks = metadata.links.filter(
+          l => this.cache.getFirstLinkpathDest(l.link, sourcePath)?.path === path
+        )
 
-          if (relevantLinks.length > 0) {
-            // Sort links by position
-            relevantLinks.sort((a, b) => {
-              if (a.position.start.line !== b.position.start.line) {
-                return a.position.start.line - b.position.start.line
-              }
-              return a.position.start.col - b.position.start.col
-            })
+        if (relevantLinks.length > 0) {
+          // Sort links by position
+          relevantLinks.sort((a, b) => {
+            if (a.position.start.line !== b.position.start.line) {
+              return a.position.start.line - b.position.start.line
+            }
+            return a.position.start.col - b.position.start.col
+          })
 
-            results.push({
-              file: sourceFile,
-              links: relevantLinks,
-              context: relevantLinks.map(l => this.getContext(sourcePath, l.position))
-            })
-          }
+          results.push({
+            file: sourceFile,
+            links: relevantLinks,
+            context: relevantLinks.map(l => this.getContext(sourcePath, l.position))
+          })
         }
       }
     }

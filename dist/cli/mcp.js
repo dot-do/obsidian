@@ -67,6 +67,9 @@ export async function runMcpCommand(options) {
         processNextLine();
     };
     rl.on('line', lineHandler);
+    // Output startup message to stderr (not stdout) to avoid mixing with JSON-RPC
+    process.stderr.write(`obsidian.do MCP server starting...\n`);
+    process.stderr.write(`Vault: ${vaultPath}\n`);
     // Now do async initialization
     const backend = new FileSystemBackend(vaultPath);
     // Scan and preload files into the backend's internal cache
@@ -97,6 +100,7 @@ export async function runMcpCommand(options) {
     server = createMcpServer({ client });
     // Mark as initialized and process any pending lines
     initialized = true;
+    process.stderr.write(`MCP server ready\n`);
     processNextLine();
     // Return a promise that resolves when stdin closes
     return new Promise((resolve, reject) => {

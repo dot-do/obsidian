@@ -19,12 +19,17 @@ export {
   getRelatedNotes,
   truncateContext,
 } from './client/context.js'
+// Export context types from shared types module
+// Legacy aliases maintained for backward compatibility
 export type {
   ContextOptions as ContextGeneratorOptions,
-  VaultContext as GeneratedVaultContext,
-  GraphStats as ContextGraphStats,
-  Note as ContextNote,
-} from './client/context.js'
+  GeneratedVaultContext,
+  ContextGraphStats,
+  ContextNote,
+  ContextOptions,
+  GenerateContextOptions,
+  QueryContextOptions,
+} from './client/types.js'
 export { MemoryBackend } from './vault/memory-backend.js'
 export { FileSystemBackend } from './vault/fs-backend.js'
 export { RestApiBackend } from './vault/rest-backend.js'

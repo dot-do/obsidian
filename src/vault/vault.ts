@@ -376,6 +376,8 @@ export class Vault extends Events {
     this.backendModifiesInProgress.add(file.path)
     try {
       await this.backend.write(file.path, existing + content)
+      // Invalidate content cache
+      this.contentCache.delete(file.path)
       const updatedFile = await this.refreshFile(file.path)
       if (updatedFile) {
         this.trigger('modify', updatedFile)

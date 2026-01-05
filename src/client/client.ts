@@ -1,12 +1,31 @@
 import type { Backend, TFile, CachedMetadata, EventRef, EventCallback } from '../types.js'
 import { Vault } from '../vault/vault.js'
 import { MetadataCache } from '../metadata/cache.js'
-import { Graph, GraphStats } from '../graph/graph.js'
-import { GraphEngine, BacklinkResult } from '../graph/engine.js'
+import { Graph } from '../graph/graph.js'
+import { GraphEngine } from '../graph/engine.js'
 import { SearchEngine } from '../search/engine.js'
 import { MemoryBackend } from '../vault/memory-backend.js'
 import { FileSystemBackend } from '../vault/fs-backend.js'
 import { RestApiBackend } from '../vault/rest-backend.js'
+
+// Re-export shared types from types.ts
+export type {
+  Note,
+  NoteResult,
+  ContextOptions,
+  VaultContext,
+  GenerateContextOptions,
+  QueryContextOptions,
+} from './types.js'
+
+// Import types for internal use
+import type {
+  NoteResult,
+  ContextOptions,
+  VaultContext,
+  GenerateContextOptions,
+  QueryContextOptions,
+} from './types.js'
 
 // Type alias for backend types
 export type VaultBackend = Backend
@@ -37,42 +56,6 @@ export interface ObsidianClientOptions {
   vaultPath?: string
 }
 
-export interface ContextOptions {
-  scope: 'summary' | 'recent' | 'related'
-  focus?: string
-  maxTokens?: number
-}
-
-export interface VaultContext {
-  summary?: string
-  tagCloud?: Record<string, number>
-  graphStats?: GraphStats
-  recentNotes?: TFile[]
-  relatedNotes?: TFile[]
-}
-
-/**
- * Result from getNote() with full note information.
- * Legacy interface - maintained for backward compatibility.
- */
-export interface NoteResult {
-  file: TFile
-  content: string
-  metadata: CachedMetadata | null
-  backlinks: TFile[]
-}
-
-/**
- * Note interface as specified in task obsidian-4y2.
- * Contains file, content, metadata, and detailed backlink information.
- */
-export interface Note {
-  file: TFile
-  content: string
-  metadata: CachedMetadata
-  backlinks: BacklinkResult[]
-}
-
 export interface SearchResultItem {
   file: TFile
   score: number
@@ -82,16 +65,6 @@ export interface SearchResultItem {
 export interface ClientSearch {
   searchContent(query: string): Promise<SearchResultItem[]>
   searchFiles(query: string): Promise<SearchResultItem[]>
-}
-
-export interface GenerateContextOptions {
-  depth?: number
-  maxTokens?: number
-}
-
-export interface QueryContextOptions {
-  maxNotes?: number
-  maxTokens?: number
 }
 
 export interface VaultStats {
@@ -400,14 +373,6 @@ export class ObsidianClient {
     for (const file of filesToReindex) {
       await this.metadataCache.indexFile(file)
     }
-  }
-
-  /**
-   * Serialize an object to YAML frontmatter string.
-   * This is the method specified in task obsidian-4y2.
-   */
-  private serializeFrontmatter(obj: Record<string, unknown>): string {
-    return this.serializeYaml(obj)
   }
 
   private serializeYaml(obj: Record<string, unknown>): string {
@@ -887,7 +852,7 @@ export class ObsidianClient {
     return matchingFiles
   }
 
-  private getFileTags(file: TFile, metadata: CachedMetadata | null): string[] {
+  private getFileTags(_file: TFile, metadata: CachedMetadata | null): string[] {
     const tags: string[] = []
 
     // Get frontmatter tags

@@ -9,6 +9,7 @@ export { GraphEngine } from './graph/engine.js';
 export { SearchEngine } from './search/engine.js';
 export { prepareSimpleSearch, prepareFuzzySearch } from './search/search.js';
 export { ObsidianClient, parseFrontmatter, getContentWithoutFrontmatter } from './client/client.js';
+export { generateContext, getGraphStats, getTagCloud, getRecentNotes, getRelatedNotes, truncateContext, } from './client/context.js';
 export { MemoryBackend } from './vault/memory-backend.js';
 export { FileSystemBackend } from './vault/fs-backend.js';
 export { RestApiBackend } from './vault/rest-backend.js';

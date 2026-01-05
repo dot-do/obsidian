@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Core CLI Entry Point (obsidian-au3)
  *

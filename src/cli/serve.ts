@@ -30,6 +30,8 @@ export interface ServeOptions {
   host: string
   /** Path to the vault directory */
   vaultPath: string
+  /** CORS origin configuration (default: 'http://localhost:*' for localhost origins only) */
+  corsOrigin?: string | string[]
 }
 
 export interface VaultServerContext {
@@ -38,18 +40,64 @@ export interface VaultServerContext {
   searchEngine: SearchEngine
   graphEngine: GraphEngine
   backend: FileSystemBackend
+  /** CORS origin configuration */
+  corsOrigin?: string | string[]
+}
+
+/**
+ * Default CORS origin - restricts to localhost only
+ * Matches http://localhost:PORT and http://127.0.0.1:PORT
+ */
+const DEFAULT_CORS_ORIGINS = [
+  'http://localhost',
+  'http://127.0.0.1',
+]
+
+/**
+ * CORS origin handler that validates origins against allowed patterns
+ */
+function createCorsOriginHandler(corsOrigin?: string | string[]): (origin: string, c: Context) => string | null {
+  return (origin: string, _c: Context): string | null => {
+    // If no origin in request (e.g., same-origin or non-browser), allow
+    if (!origin) {
+      return '*'
+    }
+
+    const allowedOrigins = corsOrigin
+      ? (Array.isArray(corsOrigin) ? corsOrigin : [corsOrigin])
+      : DEFAULT_CORS_ORIGINS
+
+    // Check if origin matches any allowed pattern
+    for (const allowed of allowedOrigins) {
+      // Exact match
+      if (allowed === origin) {
+        return origin
+      }
+      // Wildcard '*' allows all origins
+      if (allowed === '*') {
+        return origin
+      }
+      // Pattern match for localhost with any port (e.g., http://localhost matches http://localhost:3000)
+      if (origin.startsWith(allowed + ':') || origin === allowed) {
+        return origin
+      }
+    }
+
+    // Origin not allowed - return null to deny
+    return null
+  }
 }
 
 /**
  * Create a Hono app configured with vault endpoints
  */
 export function createServer(context: VaultServerContext): Hono {
-  const { vault, cache, searchEngine, graphEngine, backend } = context
+  const { vault, cache, searchEngine, graphEngine, backend, corsOrigin } = context
   const app = new Hono()
 
-  // Add CORS middleware
+  // Add CORS middleware with configurable origin (defaults to localhost only)
   app.use('*', cors({
-    origin: '*',
+    origin: createCorsOriginHandler(corsOrigin),
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type'],
   }))
@@ -312,7 +360,8 @@ export class VaultServer {
       cache: this.cache,
       searchEngine: this.searchEngine,
       graphEngine: this.graphEngine,
-      backend: this.backend
+      backend: this.backend,
+      corsOrigin: options.corsOrigin
     })
   }
 
@@ -401,7 +450,8 @@ export async function serve(options: Partial<ServeOptions> & { vaultPath: string
   const fullOptions: ServeOptions = {
     port: options.port || 3000,
     host: options.host || '127.0.0.1',
-    vaultPath: options.vaultPath
+    vaultPath: options.vaultPath,
+    corsOrigin: options.corsOrigin
   }
 
   const server = new VaultServer(fullOptions)
@@ -417,6 +467,11 @@ export async function main(args: string[], flags: Record<string, string | boolea
   const port = typeof flags.port === 'string' ? parseInt(flags.port, 10) : 3000
   const host = typeof flags.host === 'string' ? flags.host : '127.0.0.1'
   const vaultPath = typeof flags.vault === 'string' ? flags.vault : process.cwd()
+  // Parse --cors-origin flag (can be comma-separated for multiple origins)
+  const corsOriginFlag = flags['cors-origin']
+  const corsOrigin = typeof corsOriginFlag === 'string'
+    ? (corsOriginFlag.includes(',') ? corsOriginFlag.split(',').map(s => s.trim()) : corsOriginFlag)
+    : undefined
 
   // Validate port
   if (isNaN(port) || port < 1 || port > 65535) {
@@ -437,7 +492,7 @@ export async function main(args: string[], flags: Record<string, string | boolea
   }
 
   try {
-    const server = await serve({ port, host, vaultPath })
+    const server = await serve({ port, host, vaultPath, corsOrigin })
 
     // Handle graceful shutdown
     const shutdown = async () => {
