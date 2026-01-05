@@ -6,6 +6,10 @@ interface ExtendedBackend extends Backend {
   on?(event: string, callback: (path: string) => void): EventRef
 }
 
+/**
+ * Vault provides file management for an Obsidian-compatible vault.
+ * Wraps a backend storage system and provides caching, event emission, and folder management.
+ */
 export class Vault extends Events {
   private fileCache = new Map<string, TFile>()
   private folderCache = new Map<string, TFolder>()
@@ -15,6 +19,10 @@ export class Vault extends Events {
   private backendModifiesInProgress = new Set<string>()
   private backendDeletesInProgress = new Set<string>()
 
+  /**
+   * Creates a new Vault instance.
+   * @param backend - The storage backend to use (filesystem, memory, or REST).
+   */
   constructor(private backend: Backend) {
     super()
     // Listen to backend events if supported
@@ -201,6 +209,11 @@ export class Vault extends Events {
     }
   }
 
+  /**
+   * Gets a file by its vault-relative path.
+   * @param path - The vault-relative path to the file.
+   * @returns The TFile if found, or null if not found.
+   */
   getFileByPath(path: string): TFile | null {
     // Normalize path
     path = this.normalizePath(path)
@@ -230,6 +243,11 @@ export class Vault extends Events {
     return null
   }
 
+  /**
+   * Gets a file or folder by its vault-relative path.
+   * @param path - The vault-relative path.
+   * @returns The TFile or TFolder if found, or null if not found.
+   */
   getAbstractFileByPath(path: string): TAbstractFile | null {
     // Normalize path: remove leading and trailing slashes
     path = this.normalizePath(path)
@@ -259,6 +277,10 @@ export class Vault extends Events {
     return path
   }
 
+  /**
+   * Gets all markdown files in the vault.
+   * @returns An array of TFile objects for all .md files.
+   */
   getMarkdownFiles(): TFile[] {
     this.rescanBackend()
     return Array.from(this.fileCache.values()).filter(f => f.extension === 'md')
@@ -285,11 +307,19 @@ export class Vault extends Events {
     }
   }
 
+  /**
+   * Gets all files in the vault (any extension).
+   * @returns An array of all TFile objects.
+   */
   getFiles(): TFile[] {
     this.syncScanBackend()
     return Array.from(this.fileCache.values())
   }
 
+  /**
+   * Gets all loaded files and folders in the vault.
+   * @returns An array of TFile and TFolder objects.
+   */
   getAllLoadedFiles(): TAbstractFile[] {
     this.syncScanBackend()
     const files: TAbstractFile[] = Array.from(this.fileCache.values())
@@ -297,6 +327,11 @@ export class Vault extends Events {
     return [...files, ...folders]
   }
 
+  /**
+   * Gets all folders in the vault.
+   * @param includeRoot - Whether to include the root folder (default: true).
+   * @returns An array of TFolder objects.
+   */
   getAllFolders(includeRoot = true): TFolder[] {
     this.syncScanBackend()
     const folders = Array.from(this.folderCache.values())
@@ -306,10 +341,20 @@ export class Vault extends Events {
     return folders
   }
 
+  /**
+   * Reads the content of a file.
+   * @param file - The TFile to read.
+   * @returns A promise resolving to the file content as a string.
+   */
   async read(file: TFile): Promise<string> {
     return this.backend.read(file.path)
   }
 
+  /**
+   * Reads the content of a file with caching for better performance.
+   * @param file - The TFile to read.
+   * @returns A promise resolving to the file content as a string.
+   */
   async cachedRead(file: TFile): Promise<string> {
     // Check if content is cached
     if (this.contentCache.has(file.path)) {
@@ -321,10 +366,22 @@ export class Vault extends Events {
     return content
   }
 
+  /**
+   * Reads the content of a file as binary data.
+   * @param file - The TFile to read.
+   * @returns A promise resolving to the file content as an ArrayBuffer.
+   */
   async readBinary(file: TFile): Promise<ArrayBuffer> {
     return this.backend.readBinary(file.path)
   }
 
+  /**
+   * Creates a new file in the vault.
+   * @param path - The vault-relative path for the new file.
+   * @param content - The content to write to the file.
+   * @returns A promise resolving to the created TFile.
+   * @throws Error if file already exists.
+   */
   async create(path: string, content: string): Promise<TFile> {
     // Check if file already exists
     const exists = await this.backend.exists(path)
@@ -347,6 +404,13 @@ export class Vault extends Events {
     }
   }
 
+  /**
+   * Modifies the content of an existing file.
+   * @param file - The TFile to modify.
+   * @param content - The new content for the file.
+   * @returns A promise that resolves when modification is complete.
+   * @throws Error if file not found.
+   */
   async modify(file: TFile, content: string): Promise<void> {
     // Check if file exists before modifying
     const exists = await this.backend.exists(file.path)
@@ -371,6 +435,12 @@ export class Vault extends Events {
     }
   }
 
+  /**
+   * Appends content to the end of a file.
+   * @param file - The TFile to append to.
+   * @param content - The content to append.
+   * @returns A promise that resolves when the append is complete.
+   */
   async append(file: TFile, content: string): Promise<void> {
     const existing = await this.backend.read(file.path)
     this.backendModifiesInProgress.add(file.path)
@@ -387,6 +457,12 @@ export class Vault extends Events {
     }
   }
 
+  /**
+   * Processes a file's content using a transformation function.
+   * @param file - The TFile to process.
+   * @param fn - A function that takes current content and returns new content.
+   * @returns A promise resolving to the new content after transformation.
+   */
   async process(file: TFile, fn: (content: string) => string): Promise<string> {
     const content = await this.backend.read(file.path)
     const newContent = fn(content)
@@ -403,6 +479,12 @@ export class Vault extends Events {
     }
   }
 
+  /**
+   * Deletes a file from the vault.
+   * @param file - The TFile to delete.
+   * @returns A promise that resolves when deletion is complete.
+   * @throws Error if file not found.
+   */
   async delete(file: TFile): Promise<void> {
     // Check if file exists before deleting
     const exists = await this.backend.exists(file.path)
@@ -429,10 +511,22 @@ export class Vault extends Events {
     }
   }
 
+  /**
+   * Moves a file to trash (alias for delete).
+   * @param file - The TFile to trash.
+   * @returns A promise that resolves when the file is trashed.
+   */
   async trash(file: TFile): Promise<void> {
     await this.delete(file)
   }
 
+  /**
+   * Renames or moves a file to a new path.
+   * @param file - The TFile to rename.
+   * @param newPath - The new vault-relative path.
+   * @returns A promise that resolves when the rename is complete.
+   * @throws Error if source file not found or target path already exists.
+   */
   async rename(file: TFile, newPath: string): Promise<void> {
     // Check if source file exists
     const sourceExists = await this.backend.exists(file.path)
@@ -473,6 +567,13 @@ export class Vault extends Events {
     }
   }
 
+  /**
+   * Copies a file to a new path.
+   * @param file - The TFile to copy.
+   * @param newPath - The vault-relative path for the copy.
+   * @returns A promise resolving to the newly created TFile.
+   * @throws Error if target path already exists.
+   */
   async copy(file: TFile, newPath: string): Promise<TFile> {
     // Check if target path already exists
     const targetExists = await this.backend.exists(newPath)

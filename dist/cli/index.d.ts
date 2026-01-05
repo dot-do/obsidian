@@ -48,31 +48,9 @@ export declare function parseArgs(argv: string[]): ParsedArgs;
  */
 export declare function resolveVaultPath(flags: Record<string, string | boolean>): string;
 /**
- * Validate that a vault path exists and is accessible
- *
- * @param vaultPath - Path to validate
- * @throws Error if vault path is invalid, doesn't exist, or isn't readable
- */
-export declare function validateVaultPath(vaultPath: string): void;
-/**
  * Display version information and exit
  */
 export declare function showVersion(): void;
-/**
- * Display help information and exit
- *
- * @param command - Optional specific command to show help for
- */
-export declare function showHelp(command?: string): void;
-/**
- * Route to the appropriate command handler
- *
- * @param command - Command name to route to
- * @param args - Parsed arguments
- * @param flags - Parsed flags
- * @throws Error if command is unknown
- */
-export declare function routeToCommand(command: string, args: string[], flags: Record<string, string | boolean>): void;
 /**
  * Create the CLI instance with all commands
  */
@@ -84,8 +62,8 @@ export declare function run(): void;
 /**
  * Main CLI entry point
  *
- * @param argv - Command line arguments
+ * @param args - Command line arguments (defaults to process.argv.slice(2))
  * @returns Exit code (0 for success, non-zero for error)
  */
-export declare function main(argv: string[]): Promise<number>;
+export declare function main(args?: string[]): Promise<number>;
 //# sourceMappingURL=index.d.ts.map

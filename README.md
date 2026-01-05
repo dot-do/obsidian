@@ -514,10 +514,10 @@ Options:
 # Install dependencies
 npm install
 
-# Run tests
+# Run tests in watch mode
 npm test
 
-# Run tests in watch mode
+# Run tests once
 npm run test:run
 
 # Type check

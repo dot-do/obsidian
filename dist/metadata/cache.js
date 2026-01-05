@@ -52,7 +52,6 @@ export class Events {
 }
 export class MetadataCache extends Events {
     vault;
-    parser;
     cache = new Map();
     contentHashes = new Map();
     initialized = false;
@@ -63,10 +62,9 @@ export class MetadataCache extends Events {
     batchTimeout = null;
     resolvedLinks = {};
     unresolvedLinks = {};
-    constructor(vault, parser = (content) => this.parseContent(content)) {
+    constructor(vault) {
         super();
         this.vault = vault;
-        this.parser = parser;
         this.setupVaultListeners();
     }
     /**
@@ -135,24 +133,6 @@ export class MetadataCache extends Events {
                     const metadata = this.cache.get(sourcePath);
                     if (metadata) {
                         // Update link tracking - the link will now be unresolved
-                        this.updateLinkTracking(sourcePath, metadata);
-                    }
-                }
-            }
-        }
-    }
-    updateLinksToRenamedFile(oldPath, newPath) {
-        // Find all files that have resolved links to the old path
-        // and update their link tracking
-        for (const [sourcePath, targets] of Object.entries(this.resolvedLinks)) {
-            if (targets[oldPath]) {
-                // This file had a resolved link to the old path
-                // Re-index it to update link status
-                const file = this.vault.getFileByPath(sourcePath);
-                if (file) {
-                    const metadata = this.cache.get(sourcePath);
-                    if (metadata) {
-                        // Update link tracking
                         this.updateLinkTracking(sourcePath, metadata);
                     }
                 }

@@ -39,10 +39,24 @@ export interface ForwardLink {
 export declare class GraphEngine {
     private cache;
     private contentCache;
+    private backlinkIndex;
     constructor(cache: MetadataCache);
+    /**
+     * Invalidate the backlink index (call when links change)
+     */
+    invalidateBacklinkIndex(): void;
+    /**
+     * Get or build the backlink index for O(1) backlink lookups
+     */
+    private getBacklinkIndex;
+    /**
+     * Build the inverted index: target -> set of source files
+     */
+    private buildBacklinkIndex;
     /**
      * Get all backlinks pointing to a specific file path.
      * Returns simplified backlink info with source file and link positions.
+     * Uses an inverted index for O(1) lookup of source files.
      *
      * @param path - The target file path to find backlinks for
      * @returns Array of Backlink objects, each containing the source file and link positions
@@ -51,6 +65,7 @@ export declare class GraphEngine {
     /**
      * Get extended backlinks with full LinkCache metadata and surrounding context.
      * This is useful for displaying backlink previews in a UI.
+     * Uses an inverted index for O(1) lookup of source files.
      *
      * @param path - The target file path to find backlinks for
      * @returns Array of BacklinkResult objects with full link metadata and context strings

@@ -3,58 +3,9 @@
  *
  * Generates structured context from vault content optimized for LLM consumption.
  */
-import type { TFile, CachedMetadata } from '../types.js';
 import type { ObsidianClient } from './client.js';
-/**
- * Options for context generation
- */
-export interface ContextOptions {
-    /** The scope of context to generate */
-    scope: 'summary' | 'recent' | 'related';
-    /** Path for related context (required when scope is 'related') */
-    focus?: string;
-    /** Maximum tokens to include in output */
-    maxTokens?: number;
-}
-/**
- * Note interface for context generation
- */
-export interface Note {
-    file: TFile;
-    content: string;
-    metadata: CachedMetadata | null;
-}
-/**
- * Vault context result
- */
-export interface VaultContext {
-    /** Summary of the vault */
-    summary: string;
-    /** Recently modified notes */
-    recentNotes: Note[];
-    /** Notes related to focus path */
-    relatedNotes: Note[];
-    /** Tag cloud with counts */
-    tagCloud: {
-        tag: string;
-        count: number;
-    }[];
-    /** Graph statistics */
-    graphStats: GraphStats;
-}
-/**
- * Graph statistics for context
- */
-export interface GraphStats {
-    /** Total number of notes in the vault */
-    totalNotes: number;
-    /** Total number of links between notes */
-    totalLinks: number;
-    /** Number of orphan notes (no links) */
-    orphanCount: number;
-    /** Average number of links per note */
-    averageLinks: number;
-}
+export type { ContextNote as Note, GeneratedVaultContext as VaultContext, ContextGraphStats as GraphStats, ContextOptions, } from './types.js';
+import type { ContextNote as Note, GeneratedVaultContext as VaultContext, ContextGraphStats as GraphStats, ContextOptions } from './types.js';
 /**
  * Get graph statistics from the client
  */

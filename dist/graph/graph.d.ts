@@ -30,13 +30,27 @@ export interface NodeDegree {
 export type DegreeType = 'in' | 'out' | 'total';
 export declare class Graph {
     private cache;
+    private backlinkIndex;
     constructor(cache: MetadataCache);
+    /**
+     * Invalidate the backlink index (call when links change)
+     */
+    invalidateBacklinkIndex(): void;
+    /**
+     * Get or build the backlink index for O(1) backlink lookups
+     */
+    private getBacklinkIndex;
+    /**
+     * Build the inverted index: target -> set of source files
+     */
+    private buildBacklinkIndex;
     /**
      * Get outlinks from a file (files this file links to)
      */
     getOutlinks(path: string): string[];
     /**
      * Get backlinks to a file (files that link to this file)
+     * Uses an inverted index for O(1) lookup
      */
     getBacklinks(path: string): string[];
     /**

@@ -1,5 +1,8 @@
-import type { SearchResult } from '../types.js';
-export type SearchMatchFn = (text: string) => SearchResult | null;
+export interface TextSearchResult {
+    score: number;
+    matches: Array<[number, number]>;
+}
+export type SearchMatchFn = (text: string) => TextSearchResult | null;
 /**
  * Prepares a simple search function that matches words at word boundaries.
  * All query words must be present in the target for a match.

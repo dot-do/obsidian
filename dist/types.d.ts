@@ -73,10 +73,6 @@ export interface Loc {
     col: number;
     offset: number;
 }
-export interface SearchResult {
-    score: number;
-    matches: Array<[number, number]>;
-}
 export interface GraphNode {
     path: string;
     neighbors: string[];

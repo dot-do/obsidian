@@ -6,15 +6,16 @@ export interface SearchMatch {
     score: number;
     tags: string[];
 }
-export interface SearchResult {
+export interface VaultSearchResult {
     matches: SearchMatch[];
 }
 export declare function handleVaultSearch(client: ObsidianClient, args: {
     query: string;
+    limit?: number;
     filter?: {
         tags?: string[];
     };
-}): Promise<SearchResult>;
+}): Promise<VaultSearchResult>;
 export interface NoteReadResult {
     path: string;
     content: string;
@@ -87,6 +88,7 @@ export interface VaultContextResult {
 }
 export declare function handleVaultContext(client: ObsidianClient, args: {
     scope: string;
+    maxTokens?: number;
 }): Promise<VaultContextResult>;
 export interface VaultListResult {
     files: Array<{

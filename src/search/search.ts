@@ -1,6 +1,12 @@
-import type { SearchResult } from '../types.js'
+// TextSearchResult is the result of matching text against a query.
+// This is different from SearchResult in engine.ts which includes file info.
+// TextSearchResult only contains score and match positions for text matching.
+export interface TextSearchResult {
+  score: number
+  matches: Array<[number, number]> // [offset, length]
+}
 
-export type SearchMatchFn = (text: string) => SearchResult | null
+export type SearchMatchFn = (text: string) => TextSearchResult | null
 
 /**
  * Escape special regex characters in a string
@@ -54,7 +60,7 @@ export function prepareSimpleSearch(query: string): SearchMatchFn {
   // Deduplicate words for matching purposes
   const uniqueWords = [...new Set(words.map(w => w.toLowerCase()))]
 
-  return (text: string): SearchResult | null => {
+  return (text: string): TextSearchResult | null => {
     if (text === '') return null
 
     const textLower = text.toLowerCase()
@@ -105,7 +111,7 @@ export function prepareSimpleSearch(query: string): SearchMatchFn {
 export function prepareFuzzySearch(query: string): SearchMatchFn {
   const queryLower = query.toLowerCase()
 
-  return (text: string): SearchResult | null => {
+  return (text: string): TextSearchResult | null => {
     // Handle empty query - matches everything
     if (query.length === 0) {
       return { score: 0.1, matches: [] }

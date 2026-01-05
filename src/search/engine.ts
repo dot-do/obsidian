@@ -16,9 +16,24 @@ export interface SearchOptions {
   }
 }
 
+/**
+ * SearchEngine provides full-text search and filtering capabilities for vault notes.
+ * Supports content search, tag filtering, property filtering, and link queries.
+ */
 export class SearchEngine {
+  /**
+   * Creates a new SearchEngine instance.
+   * @param vault - The Vault instance to search.
+   * @param cache - The MetadataCache for accessing file metadata.
+   */
   constructor(private vault: Vault, private cache: MetadataCache) {}
 
+  /**
+   * Searches for notes matching a query string with optional filters.
+   * @param query - The search query (case-insensitive text search).
+   * @param options - Optional search options including limit, folder filter, and tag filters.
+   * @returns A promise resolving to an array of SearchResult objects sorted by relevance.
+   */
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
     // Handle edge cases
     if (options?.limit === 0) {
@@ -131,6 +146,11 @@ export class SearchEngine {
     return results
   }
 
+  /**
+   * Finds all files with a specific tag.
+   * @param tag - The tag to search for (with or without # prefix).
+   * @returns An array of TFile objects that have the specified tag.
+   */
   findByTag(tag: string): TFile[] {
     if (!tag || tag.trim() === '') {
       return []
@@ -158,6 +178,12 @@ export class SearchEngine {
     return matchingFiles
   }
 
+  /**
+   * Finds all files with a specific frontmatter property value.
+   * @param key - The property key (supports dot notation for nested properties).
+   * @param value - The value to match. Use undefined to find files missing the property.
+   * @returns An array of TFile objects matching the property criteria.
+   */
   findByProperty(key: string, value: unknown): TFile[] {
     const files = this.vault.getMarkdownFiles()
     const matchingFiles: TFile[] = []
@@ -212,6 +238,11 @@ export class SearchEngine {
     return matchingFiles
   }
 
+  /**
+   * Finds all files that link to a specific target note.
+   * @param target - The target note name or path (with or without .md extension).
+   * @returns An array of TFile objects that contain links to the target.
+   */
   findByLink(target: string): TFile[] {
     if (!target || target.trim() === '') {
       return []

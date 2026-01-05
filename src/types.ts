@@ -89,10 +89,8 @@ export interface Loc {
   offset: number
 }
 
-export interface SearchResult {
-  score: number
-  matches: Array<[number, number]> // [offset, length]
-}
+// Note: SearchResult is defined in src/search/engine.ts as the canonical type
+// for search operations. Import from there if needed.
 
 export interface GraphNode {
   path: string

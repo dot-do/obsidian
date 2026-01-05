@@ -15,7 +15,6 @@
 
 import { cac, CAC } from 'cac'
 import { ObsidianClient } from '../client/client.js'
-import { FileSystemBackend } from '../vault/fs-backend.js'
 
 const VERSION = '0.1.0'
 
@@ -191,46 +190,10 @@ export function resolveVaultPath(flags: Record<string, string | boolean>): strin
 }
 
 /**
- * Validate that a vault path exists and is accessible
- *
- * @param vaultPath - Path to validate
- * @throws Error if vault path is invalid, doesn't exist, or isn't readable
- */
-export function validateVaultPath(vaultPath: string): void {
-  // This is now handled by the client initialization
-  throw new Error('Not implemented')
-}
-
-/**
  * Display version information and exit
  */
 export function showVersion(): void {
   console.log(`obsidian.do v${VERSION}`)
-}
-
-/**
- * Display help information and exit
- *
- * @param command - Optional specific command to show help for
- */
-export function showHelp(command?: string): void {
-  throw new Error('Not implemented')
-}
-
-/**
- * Route to the appropriate command handler
- *
- * @param command - Command name to route to
- * @param args - Parsed arguments
- * @param flags - Parsed flags
- * @throws Error if command is unknown
- */
-export function routeToCommand(
-  command: string,
-  args: string[],
-  flags: Record<string, string | boolean>
-): void {
-  throw new Error('Not implemented')
 }
 
 /**
@@ -646,4 +609,11 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
     }
     return 1
   }
+}
+
+// Execute CLI when run directly (not when imported as a module)
+// Check if this module is the entry point
+const isMainModule = import.meta.url === `file://${process.argv[1]}`
+if (isMainModule) {
+  main().then(code => process.exit(code))
 }

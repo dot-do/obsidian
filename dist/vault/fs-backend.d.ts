@@ -4,7 +4,15 @@ import type { Backend, FileStat } from '../types.js';
  */
 export declare class FileSystemBackend implements Backend {
     private basePath;
+    files: Map<string, string | ArrayBuffer>;
+    private stats;
+    private initialized;
     constructor(basePath: string);
+    /**
+     * Initialize the backend by scanning for existing files.
+     * This populates the files map so Vault.syncScanBackend() can discover them.
+     */
+    initialize(): Promise<void>;
     private resolvePath;
     read(filePath: string): Promise<string>;
     readBinary(filePath: string): Promise<ArrayBuffer>;

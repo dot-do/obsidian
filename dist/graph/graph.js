@@ -1,7 +1,39 @@
 export class Graph {
     cache;
+    backlinkIndex = null;
     constructor(cache) {
         this.cache = cache;
+    }
+    /**
+     * Invalidate the backlink index (call when links change)
+     */
+    invalidateBacklinkIndex() {
+        this.backlinkIndex = null;
+    }
+    /**
+     * Get or build the backlink index for O(1) backlink lookups
+     */
+    getBacklinkIndex() {
+        if (!this.backlinkIndex) {
+            this.backlinkIndex = this.buildBacklinkIndex();
+        }
+        return this.backlinkIndex;
+    }
+    /**
+     * Build the inverted index: target -> set of source files
+     */
+    buildBacklinkIndex() {
+        const index = new Map();
+        const resolvedLinks = this.cache.resolvedLinks;
+        for (const [source, targets] of Object.entries(resolvedLinks)) {
+            for (const target of Object.keys(targets)) {
+                if (!index.has(target)) {
+                    index.set(target, new Set());
+                }
+                index.get(target).add(source);
+            }
+        }
+        return index;
     }
     /**
      * Get outlinks from a file (files this file links to)
@@ -15,16 +47,12 @@ export class Graph {
     }
     /**
      * Get backlinks to a file (files that link to this file)
+     * Uses an inverted index for O(1) lookup
      */
     getBacklinks(path) {
-        const resolvedLinks = this.cache.resolvedLinks;
-        const backlinks = [];
-        for (const [source, targets] of Object.entries(resolvedLinks)) {
-            if (targets[path]) {
-                backlinks.push(source);
-            }
-        }
-        return backlinks;
+        const index = this.getBacklinkIndex();
+        const sources = index.get(path);
+        return sources ? Array.from(sources) : [];
     }
     /**
      * Get all direct neighbors of a file (both outlinks and backlinks)
@@ -160,7 +188,15 @@ export class Graph {
      * Get all nodes (file paths) from the graph
      */
     getAllNodes() {
-        return Object.keys(this.cache.resolvedLinks);
+        const resolvedLinks = this.cache.resolvedLinks;
+        const nodes = new Set(Object.keys(resolvedLinks));
+        // Also include target-only nodes
+        for (const targets of Object.values(resolvedLinks)) {
+            for (const target of Object.keys(targets)) {
+                nodes.add(target);
+            }
+        }
+        return Array.from(nodes);
     }
     /**
      * Calculate the in-degree for a node (number of incoming links)

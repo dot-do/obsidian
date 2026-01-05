@@ -237,10 +237,21 @@ export class ObsidianClient {
     return this.metadataCache
   }
 
-  // Initialization method - loads all files and builds caches
+  /**
+   * Initializes the client by loading all files and building caches.
+   * Must be called before using most other methods.
+   * @returns A promise that resolves when initialization is complete.
+   */
   async initialize(): Promise<void> {
     if (this.initialized) {
       return
+    }
+
+    // Initialize the backend if it has an initialize method (e.g., FileSystemBackend)
+    // This scans for existing files and populates the files map
+    const backendWithInit = this.backend as { initialize?: () => Promise<void> }
+    if (typeof backendWithInit.initialize === 'function') {
+      await backendWithInit.initialize()
     }
 
     // Initialize the metadata cache (which also initializes vault file list)
@@ -277,7 +288,12 @@ export class ObsidianClient {
     }
   }
 
-  // Get a note with all its metadata and backlinks
+  /**
+   * Retrieves a note with its content, metadata, and backlinks.
+   * @param path - The vault-relative path to the markdown file.
+   * @returns A promise resolving to the note's file, content, metadata, and backlinks.
+   * @throws Error if file not found or not a markdown file.
+   */
   async getNote(path: string): Promise<NoteResult> {
     this.ensureInitialized()
     this.ensureNotDisposed()
@@ -312,7 +328,14 @@ export class ObsidianClient {
     }
   }
 
-  // Create a new note with optional frontmatter
+  /**
+   * Creates a new note with optional frontmatter.
+   * @param path - The vault-relative path for the new file.
+   * @param content - The markdown content of the note.
+   * @param frontmatter - Optional key-value pairs to include as YAML frontmatter.
+   * @returns A promise resolving to the created TFile.
+   * @throws Error if file already exists.
+   */
   async createNote(path: string, content: string, frontmatter?: Record<string, unknown>): Promise<TFile> {
     this.ensureInitialized()
     this.ensureNotDisposed()
@@ -446,7 +469,13 @@ export class ObsidianClient {
     return `${prefix}${key}: ${value}`
   }
 
-  // Update the content of an existing note
+  /**
+   * Updates the content of an existing note.
+   * @param path - The vault-relative path to the file.
+   * @param content - The new markdown content.
+   * @returns A promise that resolves when the update is complete.
+   * @throws Error if file not found.
+   */
   async updateNote(path: string, content: string): Promise<void> {
     this.ensureInitialized()
     this.ensureNotDisposed()
@@ -464,7 +493,13 @@ export class ObsidianClient {
     await this.metadataCache.indexFile(file)
   }
 
-  // Update just the frontmatter of a note, preserving content
+  /**
+   * Updates just the frontmatter of a note, preserving the body content.
+   * @param path - The vault-relative path to the file.
+   * @param frontmatter - Key-value pairs to merge into existing frontmatter. Set a value to undefined to remove it.
+   * @returns A promise that resolves when the update is complete.
+   * @throws Error if file not found.
+   */
   async updateFrontmatter(path: string, frontmatter: Record<string, unknown>): Promise<void> {
     this.ensureInitialized()
     this.ensureNotDisposed()
@@ -512,7 +547,11 @@ export class ObsidianClient {
     await this.metadataCache.indexFile(file)
   }
 
-  // Get file context with metadata and neighbors
+  /**
+   * Gets file context including metadata and neighboring files (linked and backlinked).
+   * @param file - The TFile to get context for.
+   * @returns An object containing the file, its cached metadata, and neighboring files.
+   */
   getFileContext(file: TFile): { file: TFile; metadata: CachedMetadata | null; neighbors: TFile[] } {
     this.ensureInitialized()
 
@@ -571,7 +610,13 @@ export class ObsidianClient {
     }
   }
 
-  // Generate context for a note (async version)
+  /**
+   * Generates a rich context string for a note, including metadata, content, links, and backlinks.
+   * @param pathOrFile - The path or TFile to generate context for.
+   * @param options - Optional settings for depth (linked note traversal) and maxTokens (truncation).
+   * @returns A promise resolving to a formatted context string.
+   * @throws Error if file not found.
+   */
   async generateContext(pathOrFile: string | TFile, options?: GenerateContextOptions): Promise<string> {
     this.ensureInitialized()
 
@@ -719,7 +764,12 @@ export class ObsidianClient {
     return context.substring(0, truncateIndex) + '\n\n... (truncated)'
   }
 
-  // Generate context for notes matching a query
+  /**
+   * Generates context for notes matching a search query.
+   * @param query - The search query string.
+   * @param options - Optional settings for maxNotes and maxTokens.
+   * @returns A promise resolving to a formatted context string of matching notes.
+   */
   async generateContextForQuery(query: string, options?: QueryContextOptions): Promise<string> {
     this.ensureInitialized()
 
@@ -776,12 +826,21 @@ export class ObsidianClient {
     return context
   }
 
-  // Generate context for notes with a specific tag
+  /**
+   * Generates context for notes with a specific tag.
+   * @param tag - The tag to search for (with or without # prefix).
+   * @returns A promise resolving to a formatted context string of tagged notes.
+   */
   async generateContextForTag(tag: string): Promise<string> {
     return this.generateContextForTags([tag], false)
   }
 
-  // Generate context for notes with all specified tags
+  /**
+   * Generates context for notes with specified tags.
+   * @param tags - Array of tags to search for (with or without # prefix).
+   * @param requireAll - If true, notes must have all tags; if false, any matching tag suffices.
+   * @returns A promise resolving to a formatted context string of matching notes.
+   */
   async generateContextForTags(tags: string[], requireAll = true): Promise<string> {
     this.ensureInitialized()
 
@@ -935,7 +994,12 @@ export class ObsidianClient {
     return neighbors
   }
 
-  // Event handling
+  /**
+   * Subscribes to an event emitted by the client.
+   * @param event - The event name (e.g., 'create', 'modify', 'delete', 'rename', 'changed').
+   * @param callback - The function to call when the event is emitted.
+   * @returns An EventRef that can be used to unsubscribe.
+   */
   on<T>(event: string, callback: EventCallback<T>): EventRef {
     if (!this.eventListeners.has(event)) {
       this.eventListeners.set(event, new Set())
@@ -977,7 +1041,11 @@ export class ObsidianClient {
     return absolutePath.substring(this.vaultPath.length + 1)
   }
 
-  // Batch operations
+  /**
+   * Creates multiple notes in a batch operation.
+   * @param items - Array of objects with path, content, and optional frontmatter.
+   * @returns A promise resolving to an array of created TFiles.
+   */
   async batchCreate(
     items: Array<{ path: string; content: string; frontmatter?: Record<string, unknown> }>
   ): Promise<TFile[]> {
@@ -992,6 +1060,11 @@ export class ObsidianClient {
     return files
   }
 
+  /**
+   * Updates multiple notes in a batch operation.
+   * @param items - Array of objects with path and content.
+   * @returns A promise that resolves when all updates are complete.
+   */
   async batchUpdate(items: Array<{ path: string; content: string }>): Promise<void> {
     this.ensureInitialized()
     this.ensureNotDisposed()
@@ -1001,7 +1074,10 @@ export class ObsidianClient {
     }
   }
 
-  // Vault statistics
+  /**
+   * Gets aggregate statistics about the vault.
+   * @returns An object with totalNotes, totalLinks, totalTags, and totalSize.
+   */
   getVaultStats(): VaultStats {
     this.ensureInitialized()
 
@@ -1027,7 +1103,10 @@ export class ObsidianClient {
     }
   }
 
-  // Lifecycle management
+  /**
+   * Disposes of the client, cleaning up event listeners and resources.
+   * After calling dispose(), the client should not be used.
+   */
   dispose(): void {
     if (this.disposed) {
       return

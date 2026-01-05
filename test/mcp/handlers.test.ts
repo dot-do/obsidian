@@ -49,6 +49,9 @@ function createMockClient(options: {
         fileContents[path] = content
         return newFile
       }),
+      modify: vi.fn(async (file: TFile, content: string) => {
+        fileContents[file.path] = content
+      }),
       getFiles: vi.fn(() => files),
       getAllFolders: vi.fn(() => []),
     },

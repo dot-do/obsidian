@@ -6,7 +6,41 @@ import * as path from 'path'
  * File system backend for reading/writing vaults from disk
  */
 export class FileSystemBackend implements Backend {
+  // Public files map for synchronous access by Vault (mirrors MemoryBackend pattern)
+  files = new Map<string, string | ArrayBuffer>()
+  private stats = new Map<string, FileStat>()
+  private initialized = false
+
   constructor(private basePath: string) {}
+
+  /**
+   * Initialize the backend by scanning for existing files.
+   * This populates the files map so Vault.syncScanBackend() can discover them.
+   */
+  async initialize(): Promise<void> {
+    if (this.initialized) return
+
+    // Scan for all files in the vault directory
+    const allFiles = await this.scanDirectory('')
+
+    // Populate the files map with markdown files
+    for (const filePath of allFiles) {
+      if (filePath.endsWith('.md')) {
+        try {
+          const content = await this.read(filePath)
+          const stat = await this.stat(filePath)
+          this.files.set(filePath, content)
+          if (stat) {
+            this.stats.set(filePath, stat)
+          }
+        } catch {
+          // Skip files that can't be read
+        }
+      }
+    }
+
+    this.initialized = true
+  }
 
   private resolvePath(filePath: string): string {
     const resolved = path.resolve(this.basePath, filePath)
@@ -47,6 +81,14 @@ export class FileSystemBackend implements Backend {
     // Ensure directory exists
     await fs.mkdir(path.dirname(fullPath), { recursive: true })
     await fs.writeFile(fullPath, content, 'utf-8')
+    // Keep files map in sync for markdown files
+    if (filePath.endsWith('.md')) {
+      this.files.set(filePath, content)
+      const stat = await this.stat(filePath)
+      if (stat) {
+        this.stats.set(filePath, stat)
+      }
+    }
   }
 
   async writeBinary(filePath: string, content: ArrayBuffer): Promise<void> {
@@ -54,12 +96,21 @@ export class FileSystemBackend implements Backend {
     // Ensure directory exists
     await fs.mkdir(path.dirname(fullPath), { recursive: true })
     await fs.writeFile(fullPath, Buffer.from(content))
+    // Keep files map in sync
+    this.files.set(filePath, content)
+    const stat = await this.stat(filePath)
+    if (stat) {
+      this.stats.set(filePath, stat)
+    }
   }
 
   async delete(filePath: string): Promise<void> {
     const fullPath = this.resolvePath(filePath)
     try {
       await fs.unlink(fullPath)
+      // Remove from files map
+      this.files.delete(filePath)
+      this.stats.delete(filePath)
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         throw new Error(`File not found: ${filePath}`)
@@ -113,6 +164,17 @@ export class FileSystemBackend implements Backend {
     // Ensure target directory exists
     await fs.mkdir(path.dirname(toPath), { recursive: true })
     await fs.rename(fromPath, toPath)
+    // Update files map
+    const content = this.files.get(from)
+    const stat = this.stats.get(from)
+    if (content !== undefined) {
+      this.files.delete(from)
+      this.files.set(to, content)
+    }
+    if (stat) {
+      this.stats.delete(from)
+      this.stats.set(to, { ...stat, mtime: Date.now() })
+    }
   }
 
   async copy(from: string, to: string): Promise<void> {
@@ -121,6 +183,15 @@ export class FileSystemBackend implements Backend {
     // Ensure target directory exists
     await fs.mkdir(path.dirname(toPath), { recursive: true })
     await fs.copyFile(fromPath, toPath)
+    // Update files map
+    const content = this.files.get(from)
+    if (content !== undefined) {
+      this.files.set(to, content)
+      const stat = await this.stat(to)
+      if (stat) {
+        this.stats.set(to, stat)
+      }
+    }
   }
 
   /**

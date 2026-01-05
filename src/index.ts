@@ -6,11 +6,14 @@ export { Vault } from './vault/vault.js'
 export { FileManager } from './vault/file-manager.js'
 export { MetadataCache } from './metadata/cache.js'
 export { Graph } from './graph/graph.js'
+export type { GraphStats } from './graph/graph.js'
 export { GraphEngine, type BacklinkResult, type Backlink, type ForwardLink } from './graph/engine.js'
 export { SearchEngine } from './search/engine.js'
+export type { SearchResult, SearchOptions } from './search/engine.js'
 export { prepareSimpleSearch, prepareFuzzySearch } from './search/search.js'
+export type { TextSearchResult, SearchMatchFn } from './search/search.js'
 export { ObsidianClient, parseFrontmatter, getContentWithoutFrontmatter } from './client/client.js'
-export type { ClientOptions, Note, NoteResult, VaultBackend, ObsidianClientOptions } from './client/client.js'
+export type { ClientOptions, Note, NoteResult, VaultBackend, ObsidianClientOptions, VaultStats } from './client/client.js'
 export {
   generateContext,
   getGraphStats,

@@ -21,6 +21,8 @@ export interface ServeOptions {
     host: string;
     /** Path to the vault directory */
     vaultPath: string;
+    /** CORS origin configuration (default: 'http://localhost:*' for localhost origins only) */
+    corsOrigin?: string | string[];
 }
 export interface VaultServerContext {
     vault: Vault;
@@ -28,6 +30,8 @@ export interface VaultServerContext {
     searchEngine: SearchEngine;
     graphEngine: GraphEngine;
     backend: FileSystemBackend;
+    /** CORS origin configuration */
+    corsOrigin?: string | string[];
 }
 /**
  * Create a Hono app configured with vault endpoints

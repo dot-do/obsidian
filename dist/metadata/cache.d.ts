@@ -10,13 +10,8 @@ export declare class Events {
     off(event: string, ref: EventRef): void;
     trigger(event: string, ...args: unknown[]): void;
 }
-/**
- * Parser function type for parsing markdown content into metadata
- */
-export type MarkdownParser = (content: string) => CachedMetadata;
 export declare class MetadataCache extends Events {
     private vault;
-    private parser;
     private cache;
     private contentHashes;
     private initialized;
@@ -26,13 +21,12 @@ export declare class MetadataCache extends Events {
     private batchTimeout;
     resolvedLinks: Record<string, Record<string, number>>;
     unresolvedLinks: Record<string, Record<string, number>>;
-    constructor(vault: Vault, parser?: MarkdownParser);
+    constructor(vault: Vault);
     /**
      * Set up listeners for vault events to automatically index files
      */
     private setupVaultListeners;
     private updateLinksToDeletedFile;
-    private updateLinksToRenamedFile;
     /**
      * Re-index all files that have backlinks to a given path.
      * This is called after a file is renamed to update link resolution.

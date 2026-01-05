@@ -1,3 +1,4 @@
+import * as path from 'path';
 // Helper to escape special regex characters
 function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -115,10 +116,37 @@ function serializeYamlValue(key, value) {
     }
     return `${key}: ${value}`;
 }
+// Helper to check if path is safe (no path traversal)
+function isPathSafe(filePath) {
+    // Reject empty paths
+    if (!filePath)
+        return false;
+    // Reject absolute paths
+    if (filePath.startsWith('/') || /^[a-zA-Z]:/.test(filePath))
+        return false;
+    // Normalize the path to resolve all . and .. segments
+    // This handles cases like './foo/../../../etc/passwd' which normalizes to '../../etc/passwd'
+    const normalized = path.normalize(filePath);
+    // After normalization, check if path escapes the root
+    // A normalized path starting with '..' would escape the vault root
+    if (normalized.startsWith('..'))
+        return false;
+    // Also reject if normalized path is absolute (edge case on some systems)
+    if (path.isAbsolute(normalized))
+        return false;
+    // Reject paths that contain .. anywhere in segments (belt and suspenders)
+    const segments = normalized.split(/[/\\]/);
+    if (segments.includes('..'))
+        return false;
+    return true;
+}
 // Helper to validate path
 function validatePath(path) {
     if (!path || path.trim() === '') {
         throw new Error('Path cannot be empty');
+    }
+    if (!isPathSafe(path)) {
+        throw new Error('Path contains invalid traversal patterns');
     }
 }
 // Helper to validate path has .md extension
@@ -169,14 +197,15 @@ function getLinkContext(content, targetPath, metadata) {
     return contexts;
 }
 export async function handleVaultSearch(client, args) {
-    const { query, filter } = args;
+    const { query, limit, filter } = args;
     // Validate query
     if (!query || query.trim() === '') {
         throw new Error('Query cannot be empty');
     }
     const files = client.vault.getMarkdownFiles();
     const matches = [];
-    const MAX_RESULTS = 50;
+    // Use provided limit or default to 50
+    const maxResults = limit ?? 50;
     for (const file of files) {
         try {
             const content = await client.vault.read(file);
@@ -214,7 +243,7 @@ export async function handleVaultSearch(client, args) {
     // Sort by score descending
     matches.sort((a, b) => b.score - a.score);
     // Limit results
-    return { matches: matches.slice(0, MAX_RESULTS) };
+    return { matches: matches.slice(0, maxResults) };
 }
 export async function handleNoteRead(client, args) {
     const { path, includeBacklinks } = args;
@@ -335,8 +364,27 @@ export async function handleGraphBacklinks(client, args) {
         count: backlinks.length,
     };
 }
+// Helper to estimate tokens from text (rough approximation: ~4 chars per token)
+function estimateTokens(text) {
+    return Math.ceil(text.length / 4);
+}
+// Helper to truncate files array to fit within token limit
+function truncateFilesToTokenLimit(files, maxTokens) {
+    let currentTokens = 0;
+    const result = [];
+    for (const file of files) {
+        // Estimate tokens for this file entry (path + metadata structure)
+        const fileTokens = estimateTokens(JSON.stringify(file));
+        if (currentTokens + fileTokens > maxTokens) {
+            break;
+        }
+        currentTokens += fileTokens;
+        result.push(file);
+    }
+    return result;
+}
 export async function handleVaultContext(client, args) {
-    const { scope } = args;
+    const { scope, maxTokens } = args;
     if (!scope || scope.trim() === '' || scope !== scope.trim()) {
         throw new Error('Invalid scope');
     }
@@ -367,8 +415,10 @@ export async function handleVaultContext(client, args) {
                 edges.push({ source: sourcePath, target: targetPath });
             }
         }
+        // Apply token limit if specified
+        const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos;
         return {
-            files: fileInfos,
+            files: truncatedFiles,
             folders: Array.from(folders).sort(),
             stats: { totalNotes: files.length },
             graph: { edges },
@@ -380,22 +430,23 @@ export async function handleVaultContext(client, args) {
         if (filteredFiles.length === 0 && !files.some(f => f.path.startsWith(folderPath))) {
             throw new Error(`Folder not found: ${folderPath}`);
         }
-        return {
-            files: filteredFiles.map(f => ({
-                path: f.path,
-                metadata: {
-                    frontmatter: client.metadataCache.getCache(f.path)?.frontmatter,
-                },
-            })),
-        };
+        const fileInfos = filteredFiles.map(f => ({
+            path: f.path,
+            metadata: {
+                frontmatter: client.metadataCache.getCache(f.path)?.frontmatter,
+            },
+        }));
+        // Apply token limit if specified
+        const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos;
+        return { files: truncatedFiles };
     }
     if (scope.startsWith('tag:')) {
         const tagName = scope.slice(4);
-        const filteredFiles = [];
+        const fileInfos = [];
         for (const file of files) {
             const metadata = client.metadataCache.getCache(file.path);
             if (hasAllTags(metadata, [tagName])) {
-                filteredFiles.push({
+                fileInfos.push({
                     path: file.path,
                     metadata: {
                         frontmatter: metadata?.frontmatter,
@@ -403,7 +454,9 @@ export async function handleVaultContext(client, args) {
                 });
             }
         }
-        return { files: filteredFiles };
+        // Apply token limit if specified
+        const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos;
+        return { files: truncatedFiles };
     }
     if (scope.startsWith('recent:')) {
         const duration = scope.slice(7);
@@ -412,14 +465,15 @@ export async function handleVaultContext(client, args) {
         const recentFiles = files
             .filter(f => now - f.stat.mtime < durationMs)
             .sort((a, b) => b.stat.mtime - a.stat.mtime);
-        return {
-            files: recentFiles.map(f => ({
-                path: f.path,
-                metadata: {
-                    frontmatter: client.metadataCache.getCache(f.path)?.frontmatter,
-                },
-            })),
-        };
+        const fileInfos = recentFiles.map(f => ({
+            path: f.path,
+            metadata: {
+                frontmatter: client.metadataCache.getCache(f.path)?.frontmatter,
+            },
+        }));
+        // Apply token limit if specified
+        const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos;
+        return { files: truncatedFiles };
     }
     if (scope.startsWith('linked:')) {
         const notePath = scope.slice(7);
@@ -440,11 +494,11 @@ export async function handleVaultContext(client, args) {
         for (const blPath of backlinks) {
             linkedPaths.add(blPath);
         }
-        const linkedFiles = [];
+        const fileInfos = [];
         for (const linkedPath of linkedPaths) {
             const linkedFile = client.vault.getFileByPath(linkedPath);
             if (linkedFile) {
-                linkedFiles.push({
+                fileInfos.push({
                     path: linkedFile.path,
                     metadata: {
                         frontmatter: client.metadataCache.getCache(linkedPath)?.frontmatter,
@@ -452,7 +506,9 @@ export async function handleVaultContext(client, args) {
                 });
             }
         }
-        return { files: linkedFiles };
+        // Apply token limit if specified
+        const truncatedFiles = maxTokens ? truncateFilesToTokenLimit(fileInfos, maxTokens) : fileInfos;
+        return { files: truncatedFiles };
     }
     throw new Error(`Invalid scope: ${scope}`);
 }
@@ -498,9 +554,8 @@ export async function handleNoteUpdate(client, args) {
     if (!file) {
         throw new Error(`Note not found: ${path}`);
     }
-    // Update content using vault.create with same path (overwrites)
-    // The mock client handles this through the create method
-    await client.vault.create(path, content);
+    // Update content using vault.modify for existing files
+    await client.vault.modify(file, content);
     return {
         path,
         success: true,
@@ -543,7 +598,7 @@ export async function handleNoteAppend(client, args) {
         // Append to end
         newContent = existingContent + content;
     }
-    await client.vault.create(path, newContent);
+    await client.vault.modify(file, newContent);
     return {
         path,
         success: true,
@@ -580,7 +635,7 @@ export async function handleFrontmatterUpdate(client, args) {
     // Build new content
     const yamlContent = serializeFrontmatter(finalFrontmatter);
     const newContent = `---\n${yamlContent}\n---\n\n${bodyContent}`;
-    await client.vault.create(path, newContent);
+    await client.vault.modify(file, newContent);
     return {
         path,
         success: true,

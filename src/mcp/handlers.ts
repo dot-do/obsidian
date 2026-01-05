@@ -1,5 +1,6 @@
 import type { ObsidianClient } from '../client/client.js'
 import type { TFile, CachedMetadata } from '../types.js'
+import * as path from 'path'
 
 // Helper to escape special regex characters
 function escapeRegex(str: string): string {
@@ -144,8 +145,19 @@ function isPathSafe(filePath: string): boolean {
   // Reject absolute paths
   if (filePath.startsWith('/') || /^[a-zA-Z]:/.test(filePath)) return false
 
-  // Reject parent directory references
-  const segments = filePath.split(/[/\\]/)
+  // Normalize the path to resolve all . and .. segments
+  // This handles cases like './foo/../../../etc/passwd' which normalizes to '../../etc/passwd'
+  const normalized = path.normalize(filePath)
+
+  // After normalization, check if path escapes the root
+  // A normalized path starting with '..' would escape the vault root
+  if (normalized.startsWith('..')) return false
+
+  // Also reject if normalized path is absolute (edge case on some systems)
+  if (path.isAbsolute(normalized)) return false
+
+  // Reject paths that contain .. anywhere in segments (belt and suspenders)
+  const segments = normalized.split(/[/\\]/)
   if (segments.includes('..')) return false
 
   return true
@@ -223,11 +235,14 @@ export interface SearchMatch {
   tags: string[]
 }
 
-export interface SearchResult {
+// Note: VaultSearchResult is named differently from SearchResult in src/search/engine.ts
+// to avoid conflicts. The search engine's SearchResult is the canonical type for
+// individual search result items, while VaultSearchResult wraps multiple SearchMatch items.
+export interface VaultSearchResult {
   matches: SearchMatch[]
 }
 
-export async function handleVaultSearch(client: ObsidianClient, args: { query: string; limit?: number; filter?: { tags?: string[] } }): Promise<SearchResult> {
+export async function handleVaultSearch(client: ObsidianClient, args: { query: string; limit?: number; filter?: { tags?: string[] } }): Promise<VaultSearchResult> {
   const { query, limit, filter } = args
 
   // Validate query
@@ -732,9 +747,8 @@ export async function handleNoteUpdate(client: ObsidianClient, args: { path: str
     throw new Error(`Note not found: ${path}`)
   }
 
-  // Update content using vault.create with same path (overwrites)
-  // The mock client handles this through the create method
-  await client.vault.create(path, content)
+  // Update content using vault.modify for existing files
+  await client.vault.modify(file, content)
 
   return {
     path,
@@ -788,7 +802,7 @@ export async function handleNoteAppend(client: ObsidianClient, args: { path: str
     newContent = existingContent + content
   }
 
-  await client.vault.create(path, newContent)
+  await client.vault.modify(file, newContent)
 
   return {
     path,
@@ -839,7 +853,7 @@ export async function handleFrontmatterUpdate(client: ObsidianClient, args: { pa
   const yamlContent = serializeFrontmatter(finalFrontmatter)
   const newContent = `---\n${yamlContent}\n---\n\n${bodyContent}`
 
-  await client.vault.create(path, newContent)
+  await client.vault.modify(file, newContent)
 
   return {
     path,

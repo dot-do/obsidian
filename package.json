@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "obsidian": "./dist/cli/index.js"
+    "obsidian": "dist/cli/index.js"
   },
   "exports": {
     ".": {
@@ -21,7 +21,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/obsidian-do/obsidian.do"
+    "url": "git+https://github.com/obsidian-do/obsidian.do.git"
   },
   "author": "obsidian.do",
   "homepage": "https://obsidian.do",
@@ -40,6 +40,9 @@
     "knowledge-graph"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0",

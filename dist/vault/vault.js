@@ -1,4 +1,8 @@
 import { Events } from './events.js';
+/**
+ * Vault provides file management for an Obsidian-compatible vault.
+ * Wraps a backend storage system and provides caching, event emission, and folder management.
+ */
 export class Vault extends Events {
     backend;
     fileCache = new Map();
@@ -8,6 +12,10 @@ export class Vault extends Events {
     backendCreatesInProgress = new Set();
     backendModifiesInProgress = new Set();
     backendDeletesInProgress = new Set();
+    /**
+     * Creates a new Vault instance.
+     * @param backend - The storage backend to use (filesystem, memory, or REST).
+     */
     constructor(backend) {
         super();
         this.backend = backend;
@@ -177,6 +185,11 @@ export class Vault extends Events {
             }
         }
     }
+    /**
+     * Gets a file by its vault-relative path.
+     * @param path - The vault-relative path to the file.
+     * @returns The TFile if found, or null if not found.
+     */
     getFileByPath(path) {
         // Normalize path
         path = this.normalizePath(path);
@@ -201,6 +214,11 @@ export class Vault extends Events {
         }
         return null;
     }
+    /**
+     * Gets a file or folder by its vault-relative path.
+     * @param path - The vault-relative path.
+     * @returns The TFile or TFolder if found, or null if not found.
+     */
     getAbstractFileByPath(path) {
         // Normalize path: remove leading and trailing slashes
         path = this.normalizePath(path);
@@ -226,6 +244,10 @@ export class Vault extends Events {
         }
         return path;
     }
+    /**
+     * Gets all markdown files in the vault.
+     * @returns An array of TFile objects for all .md files.
+     */
     getMarkdownFiles() {
         this.rescanBackend();
         return Array.from(this.fileCache.values()).filter(f => f.extension === 'md');
@@ -250,16 +272,29 @@ export class Vault extends Events {
             }
         }
     }
+    /**
+     * Gets all files in the vault (any extension).
+     * @returns An array of all TFile objects.
+     */
     getFiles() {
         this.syncScanBackend();
         return Array.from(this.fileCache.values());
     }
+    /**
+     * Gets all loaded files and folders in the vault.
+     * @returns An array of TFile and TFolder objects.
+     */
     getAllLoadedFiles() {
         this.syncScanBackend();
         const files = Array.from(this.fileCache.values());
         const folders = Array.from(this.folderCache.values());
         return [...files, ...folders];
     }
+    /**
+     * Gets all folders in the vault.
+     * @param includeRoot - Whether to include the root folder (default: true).
+     * @returns An array of TFolder objects.
+     */
     getAllFolders(includeRoot = true) {
         this.syncScanBackend();
         const folders = Array.from(this.folderCache.values());
@@ -268,9 +303,19 @@ export class Vault extends Events {
         }
         return folders;
     }
+    /**
+     * Reads the content of a file.
+     * @param file - The TFile to read.
+     * @returns A promise resolving to the file content as a string.
+     */
     async read(file) {
         return this.backend.read(file.path);
     }
+    /**
+     * Reads the content of a file with caching for better performance.
+     * @param file - The TFile to read.
+     * @returns A promise resolving to the file content as a string.
+     */
     async cachedRead(file) {
         // Check if content is cached
         if (this.contentCache.has(file.path)) {
@@ -281,9 +326,21 @@ export class Vault extends Events {
         this.contentCache.set(file.path, content);
         return content;
     }
+    /**
+     * Reads the content of a file as binary data.
+     * @param file - The TFile to read.
+     * @returns A promise resolving to the file content as an ArrayBuffer.
+     */
     async readBinary(file) {
         return this.backend.readBinary(file.path);
     }
+    /**
+     * Creates a new file in the vault.
+     * @param path - The vault-relative path for the new file.
+     * @param content - The content to write to the file.
+     * @returns A promise resolving to the created TFile.
+     * @throws Error if file already exists.
+     */
     async create(path, content) {
         // Check if file already exists
         const exists = await this.backend.exists(path);
@@ -306,6 +363,13 @@ export class Vault extends Events {
             this.backendCreatesInProgress.delete(path);
         }
     }
+    /**
+     * Modifies the content of an existing file.
+     * @param file - The TFile to modify.
+     * @param content - The new content for the file.
+     * @returns A promise that resolves when modification is complete.
+     * @throws Error if file not found.
+     */
     async modify(file, content) {
         // Check if file exists before modifying
         const exists = await this.backend.exists(file.path);
@@ -329,11 +393,19 @@ export class Vault extends Events {
             this.backendModifiesInProgress.delete(file.path);
         }
     }
+    /**
+     * Appends content to the end of a file.
+     * @param file - The TFile to append to.
+     * @param content - The content to append.
+     * @returns A promise that resolves when the append is complete.
+     */
     async append(file, content) {
         const existing = await this.backend.read(file.path);
         this.backendModifiesInProgress.add(file.path);
         try {
             await this.backend.write(file.path, existing + content);
+            // Invalidate content cache
+            this.contentCache.delete(file.path);
             const updatedFile = await this.refreshFile(file.path);
             if (updatedFile) {
                 this.trigger('modify', updatedFile);
@@ -343,6 +415,12 @@ export class Vault extends Events {
             this.backendModifiesInProgress.delete(file.path);
         }
     }
+    /**
+     * Processes a file's content using a transformation function.
+     * @param file - The TFile to process.
+     * @param fn - A function that takes current content and returns new content.
+     * @returns A promise resolving to the new content after transformation.
+     */
     async process(file, fn) {
         const content = await this.backend.read(file.path);
         const newContent = fn(content);
@@ -359,6 +437,12 @@ export class Vault extends Events {
             this.backendModifiesInProgress.delete(file.path);
         }
     }
+    /**
+     * Deletes a file from the vault.
+     * @param file - The TFile to delete.
+     * @returns A promise that resolves when deletion is complete.
+     * @throws Error if file not found.
+     */
     async delete(file) {
         // Check if file exists before deleting
         const exists = await this.backend.exists(file.path);
@@ -382,9 +466,21 @@ export class Vault extends Events {
             this.backendDeletesInProgress.delete(file.path);
         }
     }
+    /**
+     * Moves a file to trash (alias for delete).
+     * @param file - The TFile to trash.
+     * @returns A promise that resolves when the file is trashed.
+     */
     async trash(file) {
         await this.delete(file);
     }
+    /**
+     * Renames or moves a file to a new path.
+     * @param file - The TFile to rename.
+     * @param newPath - The new vault-relative path.
+     * @returns A promise that resolves when the rename is complete.
+     * @throws Error if source file not found or target path already exists.
+     */
     async rename(file, newPath) {
         // Check if source file exists
         const sourceExists = await this.backend.exists(file.path);
@@ -420,6 +516,13 @@ export class Vault extends Events {
             this.trigger('rename', { file: newFile, oldPath });
         }
     }
+    /**
+     * Copies a file to a new path.
+     * @param file - The TFile to copy.
+     * @param newPath - The vault-relative path for the copy.
+     * @returns A promise resolving to the newly created TFile.
+     * @throws Error if target path already exists.
+     */
     async copy(file, newPath) {
         // Check if target path already exists
         const targetExists = await this.backend.exists(newPath);
