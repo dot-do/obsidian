@@ -14,7 +14,9 @@
  */
 import { cac } from 'cac';
 import { ObsidianClient } from '../client/client.js';
+import { createBridgeClient } from '../client/bridge-client.js';
 const VERSION = '0.1.0';
+const BRIDGE_PORT = 22360;
 /**
  * Parse command line arguments into structured format
  *
@@ -164,12 +166,30 @@ export function showVersion() {
     console.log(`obsidian.do v${VERSION}`);
 }
 /**
- * Create an ObsidianClient with the given vault path
+ * Create a client - tries Bridge plugin first, falls back to filesystem
  */
 async function createClient(vaultPath) {
+    // Try Bridge plugin first (auto-detect)
+    const bridgeClient = await createBridgeClient(BRIDGE_PORT);
+    if (bridgeClient) {
+        console.error('[obsidian] Connected to Obsidian Bridge (live mode)');
+        return { type: 'bridge', client: bridgeClient };
+    }
+    // Fall back to filesystem
     const client = new ObsidianClient({ backend: 'filesystem', vaultPath });
     await client.initialize();
-    return client;
+    return { type: 'filesystem', client };
+}
+/**
+ * Dispose of client resources
+ */
+function disposeClient(clientWrapper) {
+    if (clientWrapper.type === 'bridge') {
+        clientWrapper.client.disconnect();
+    }
+    else {
+        clientWrapper.client.dispose();
+    }
 }
 /**
  * Create the CLI instance with all commands
@@ -188,48 +208,40 @@ export function createCli() {
         .action(async (query, options) => {
         try {
             const vaultPath = options.vault || process.env.OBSIDIAN_VAULT || process.cwd();
-            const client = await createClient(vaultPath);
-            const searchOptions = {
-                limit: options.limit
-            };
-            if (options.tags || options.folder) {
-                searchOptions.filter = {};
-                if (options.tags) {
-                    searchOptions.filter.tags = options.tags.split(',').map(t => t.trim().replace(/^#/, ''));
-                }
-                if (options.folder) {
-                    searchOptions.filter.folder = options.folder;
-                }
-            }
-            const results = await client.search.searchContent(query);
-            // Apply tag filter manually if specified
-            let filteredResults = results;
-            if (options.tags) {
-                const tagFilters = options.tags.split(',').map(t => t.trim().replace(/^#/, '').toLowerCase());
-                filteredResults = results.filter(r => {
-                    const metadata = client.metadataCache.getFileCache(r.file);
-                    const fileTags = getFileTags(metadata);
-                    return tagFilters.some(tag => fileTags.some(ft => ft.toLowerCase() === tag));
-                });
-            }
-            // Apply limit
-            if (options.limit) {
-                filteredResults = filteredResults.slice(0, options.limit);
-            }
-            if (options.json) {
-                console.log(JSON.stringify({
-                    results: filteredResults.map(r => ({
-                        path: r.file.path,
-                        score: r.score
-                    }))
-                }, null, 2));
+            const clientWrapper = await createClient(vaultPath);
+            let searchResults = [];
+            if (clientWrapper.type === 'bridge') {
+                const results = await clientWrapper.client.search(query, { limit: options.limit });
+                searchResults = results.map(r => ({ path: r.path, score: r.score }));
             }
             else {
-                for (const r of filteredResults) {
-                    console.log(`${r.file.path} (score: ${r.score})`);
+                const client = clientWrapper.client;
+                const results = await client.search.searchContent(query);
+                // Apply tag filter manually if specified
+                let filteredResults = results;
+                if (options.tags) {
+                    const tagFilters = options.tags.split(',').map(t => t.trim().replace(/^#/, '').toLowerCase());
+                    filteredResults = results.filter(r => {
+                        const metadata = client.metadataCache.getFileCache(r.file);
+                        const fileTags = getFileTags(metadata);
+                        return tagFilters.some(tag => fileTags.some(ft => ft.toLowerCase() === tag));
+                    });
+                }
+                // Apply limit
+                if (options.limit) {
+                    filteredResults = filteredResults.slice(0, options.limit);
+                }
+                searchResults = filteredResults.map(r => ({ path: r.file.path, score: r.score }));
+            }
+            if (options.json) {
+                console.log(JSON.stringify({ results: searchResults }, null, 2));
+            }
+            else {
+                for (const r of searchResults) {
+                    console.log(`${r.path} (score: ${r.score})`);
                 }
             }
-            client.dispose();
+            disposeClient(clientWrapper);
         }
         catch (error) {
             console.error(`Error: ${error.message}`);
@@ -244,31 +256,44 @@ export function createCli() {
         .action(async (notePath, options) => {
         try {
             const vaultPath = options.vault || process.env.OBSIDIAN_VAULT || process.cwd();
-            const client = await createClient(vaultPath);
-            const note = await client.getNote(notePath);
+            const clientWrapper = await createClient(vaultPath);
+            let content;
+            let frontmatter = {};
+            let backlinks = [];
+            if (clientWrapper.type === 'bridge') {
+                const note = await clientWrapper.client.readNote(notePath, {
+                    includeBacklinks: options.backlinks,
+                    includeMetadata: true
+                });
+                content = note.content;
+                frontmatter = note.metadata?.frontmatter || {};
+                if (note.backlinks) {
+                    backlinks = note.backlinks.map(bl => ({ path: bl.path }));
+                }
+            }
+            else {
+                const note = await clientWrapper.client.getNote(notePath);
+                content = note.content;
+                frontmatter = note.metadata?.frontmatter || {};
+                backlinks = note.backlinks.map(bl => ({ path: bl.path }));
+            }
             if (options.json) {
-                const result = {
-                    path: note.file.path,
-                    content: note.content,
-                    frontmatter: note.metadata?.frontmatter || {}
-                };
+                const result = { path: notePath, content, frontmatter };
                 if (options.backlinks) {
-                    result.backlinks = note.backlinks.map(bl => ({
-                        path: bl.path
-                    }));
+                    result.backlinks = backlinks;
                 }
                 console.log(JSON.stringify(result, null, 2));
             }
             else {
-                console.log(note.content);
-                if (options.backlinks && note.backlinks.length > 0) {
+                console.log(content);
+                if (options.backlinks && backlinks.length > 0) {
                     console.log('\n--- Backlinks ---');
-                    for (const bl of note.backlinks) {
+                    for (const bl of backlinks) {
                         console.log(`- ${bl.path}`);
                     }
                 }
             }
-            client.dispose();
+            disposeClient(clientWrapper);
         }
         catch (error) {
             console.error(`Note not found: ${notePath}`);
@@ -283,18 +308,23 @@ export function createCli() {
         .action(async (notePath, options) => {
         try {
             const vaultPath = options.vault || process.env.OBSIDIAN_VAULT || process.cwd();
-            const client = await createClient(vaultPath);
+            const clientWrapper = await createClient(vaultPath);
             const frontmatter = options.tags
                 ? { tags: options.tags.split(',').map(t => t.trim().replace(/^#/, '')) }
                 : undefined;
-            await client.createNote(notePath, options.content || '', frontmatter);
+            if (clientWrapper.type === 'bridge') {
+                await clientWrapper.client.createNote(notePath, options.content || '', frontmatter);
+            }
+            else {
+                await clientWrapper.client.createNote(notePath, options.content || '', frontmatter);
+            }
             if (options.json) {
                 console.log(JSON.stringify({ path: notePath, created: true }, null, 2));
             }
             else {
                 console.log(`Created: ${notePath}`);
             }
-            client.dispose();
+            disposeClient(clientWrapper);
         }
         catch (error) {
             console.error(`Error: ${error.message}`);
@@ -308,11 +338,18 @@ export function createCli() {
         .action(async (notePath, options) => {
         try {
             const vaultPath = options.vault || process.env.OBSIDIAN_VAULT || process.cwd();
-            const client = await createClient(vaultPath);
-            const note = await client.getNote(notePath);
-            const backlinks = note.backlinks;
+            const clientWrapper = await createClient(vaultPath);
+            let backlinks = [];
+            if (clientWrapper.type === 'bridge') {
+                const result = await clientWrapper.client.getBacklinks(notePath);
+                backlinks = result.map(bl => ({ path: bl.path }));
+            }
+            else {
+                const note = await clientWrapper.client.getNote(notePath);
+                backlinks = note.backlinks.map(bl => ({ path: bl.path }));
+            }
             if (options.json) {
-                console.log(JSON.stringify(backlinks.map(bl => ({ path: bl.path })), null, 2));
+                console.log(JSON.stringify(backlinks, null, 2));
             }
             else {
                 if (backlinks.length === 0) {
@@ -324,7 +361,7 @@ export function createCli() {
                     }
                 }
             }
-            client.dispose();
+            disposeClient(clientWrapper);
         }
         catch (error) {
             console.error(`Error: ${error.message}`);
@@ -337,26 +374,32 @@ export function createCli() {
         .action(async (folder, options) => {
         try {
             const vaultPath = options.vault || process.env.OBSIDIAN_VAULT || process.cwd();
-            const client = await createClient(vaultPath);
-            let files = client.vault.getMarkdownFiles();
-            // Filter by folder if specified
-            if (folder) {
-                const normalizedFolder = folder.replace(/\/$/, '');
-                files = files.filter(f => f.path.startsWith(normalizedFolder + '/'));
-            }
-            if (options.json) {
-                console.log(JSON.stringify(files.map(f => ({
-                    path: f.path,
-                    name: f.name,
-                    basename: f.basename
-                })), null, 2));
+            const clientWrapper = await createClient(vaultPath);
+            let fileList = [];
+            if (clientWrapper.type === 'bridge') {
+                const result = await clientWrapper.client.list(folder, true);
+                fileList = result
+                    .filter(f => f.type === 'file' && f.path.endsWith('.md'))
+                    .map(f => ({ path: f.path }));
             }
             else {
-                for (const f of files) {
+                let files = clientWrapper.client.vault.getMarkdownFiles();
+                // Filter by folder if specified
+                if (folder) {
+                    const normalizedFolder = folder.replace(/\/$/, '');
+                    files = files.filter(f => f.path.startsWith(normalizedFolder + '/'));
+                }
+                fileList = files.map(f => ({ path: f.path, name: f.name, basename: f.basename }));
+            }
+            if (options.json) {
+                console.log(JSON.stringify(fileList, null, 2));
+            }
+            else {
+                for (const f of fileList) {
                     console.log(f.path);
                 }
             }
-            client.dispose();
+            disposeClient(clientWrapper);
         }
         catch (error) {
             console.error(`Error: ${error.message}`);
@@ -370,18 +413,27 @@ export function createCli() {
         .action(async (options) => {
         try {
             const vaultPath = options.vault || process.env.OBSIDIAN_VAULT || process.cwd();
-            const client = await createClient(vaultPath);
-            const files = client.vault.getMarkdownFiles();
-            const tagCounts = new Map();
-            for (const file of files) {
-                const metadata = client.metadataCache.getFileCache(file);
-                const tags = getFileTags(metadata);
-                for (const tag of tags) {
-                    tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
-                }
+            const clientWrapper = await createClient(vaultPath);
+            let sortedTags = [];
+            if (clientWrapper.type === 'bridge') {
+                const context = await clientWrapper.client.getContext();
+                sortedTags = context.tagCloud
+                    .map(t => [t.tag, t.count])
+                    .sort((a, b) => a[0].localeCompare(b[0]));
             }
-            // Sort by name
-            const sortedTags = Array.from(tagCounts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+            else {
+                const client = clientWrapper.client;
+                const files = client.vault.getMarkdownFiles();
+                const tagCounts = new Map();
+                for (const file of files) {
+                    const metadata = client.metadataCache.getFileCache(file);
+                    const tags = getFileTags(metadata);
+                    for (const tag of tags) {
+                        tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+                    }
+                }
+                sortedTags = Array.from(tagCounts.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+            }
             if (options.json) {
                 if (options.count) {
                     console.log(JSON.stringify(sortedTags.map(([tag, count]) => ({ tag, count })), null, 2));
@@ -402,7 +454,7 @@ export function createCli() {
                     }
                 }
             }
-            client.dispose();
+            disposeClient(clientWrapper);
         }
         catch (error) {
             console.error(`Error: ${error.message}`);
