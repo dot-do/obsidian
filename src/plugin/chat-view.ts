@@ -61,14 +61,23 @@ export interface ChatViewConfig {
 }
 
 /**
- * Generate a unique ID
+ * Generate a unique ID for messages
+ *
+ * Creates a unique identifier combining random characters and timestamp.
+ *
+ * @returns A unique message ID string
  */
 function generateId(): string {
   return 'msg-' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36)
 }
 
 /**
- * Sanitize HTML to prevent XSS
+ * Sanitize HTML to prevent XSS attacks
+ *
+ * Escapes HTML special characters to prevent script injection.
+ *
+ * @param text - The text to sanitize
+ * @returns Sanitized text safe for HTML insertion
  */
 function sanitizeHtml(text: string): string {
   return text
@@ -80,40 +89,94 @@ function sanitizeHtml(text: string): string {
 }
 
 /**
- * Simple markdown parser for rendering
+ * Render markdown to HTML
+ *
+ * Converts markdown syntax to HTML with proper escaping and formatting.
+ * Supports headings, code blocks, inline code, bold, italic, links, wikilinks, and lists.
+ *
+ * @param content - The markdown content to render
+ * @returns HTML string with proper formatting
  */
 function renderMarkdownToHtml(content: string): string {
   let html = sanitizeHtml(content)
 
-  // Headings
+  // Code blocks (must be processed before inline code)
+  // Matches ```language\ncode\n``` or ```\ncode\n```
+  html = html.replace(/```(\w*)\r?\n([\s\S]*?)```/g, (_, lang, code) => {
+    const language = lang ? ` class="language-${lang}"` : ''
+    return `<pre><code${language}>${code}</code></pre>`
+  })
+
+  // Inline code (backticks)
+  // Non-greedy match to handle multiple inline code segments
+  html = html.replace(/`([^`\n]+?)`/g, '<code>$1</code>')
+
+  // Bold - both ** and __ syntax
+  // Non-greedy match, doesn't cross line boundaries
+  html = html.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/__([^_\n]+?)__/g, '<strong>$1</strong>')
+
+  // Italic - both * and _ syntax (after bold to avoid conflicts)
+  // Non-greedy match, doesn't cross line boundaries
+  html = html.replace(/\*([^*\n]+?)\*/g, '<em>$1</em>')
+  html = html.replace(/_([^_\n]+?)_/g, '<em>$1</em>')
+
+  // Headings (must be at start of line)
+  // Match from h6 to h1 to avoid h1 matching h2/h3
+  html = html.replace(/^###### (.+)$/gm, '<h6>$1</h6>')
+  html = html.replace(/^##### (.+)$/gm, '<h5>$1</h5>')
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>')
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>')
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>')
   html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>')
 
-  // Code blocks
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
+  // Links - [text](url) or [text](url "title")
+  html = html.replace(/\[([^\]]+)\]\(([^)]+?)(?:\s+"([^"]+)")?\)/g, (_, text, url, title) => {
+    const titleAttr = title ? ` title="${title}"` : ''
+    return `<a href="${url}"${titleAttr}>${text}</a>`
+  })
 
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
+  // Wikilinks - [[page]] or [[page|display text]]
+  html = html.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, page, displayText) => {
+    const text = displayText || page
+    return `<a class="internal-link" data-href="${page}">${text}</a>`
+  })
 
-  // Bold
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  // Unordered lists (- or * at start of line)
+  html = html.replace(/^[*-] (.+)$/gm, '<li>$1</li>')
+  // Wrap consecutive list items in ul tags
+  html = html.replace(/(<li>.*?<\/li>\r?\n?)+/g, '<ul>$&</ul>')
 
-  // Italic
-  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>')
+  // Ordered lists (number followed by . or ) at start of line)
+  html = html.replace(/^\d+[.)]\s+(.+)$/gm, '<li>$1</li>')
+  // Wrap consecutive numbered list items in ol tags (avoid wrapping ul items)
+  html = html.replace(/^(<li>(?:(?!<ul>).)*?<\/li>\r?\n?)+/gm, (match) => {
+    // Only wrap if not already wrapped in ul
+    return match.includes('<ul>') ? match : `<ol>${match}</ol>`
+  })
 
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+  // Horizontal rules
+  html = html.replace(/^(?:---|\*\*\*|___)\s*$/gm, '<hr>')
 
-  // Wikilinks
-  html = html.replace(/\[\[([^\]]+)\]\]/g, '<a class="internal-link" data-href="$1">$1</a>')
+  // Blockquotes
+  html = html.replace(/^&gt;\s?(.+)$/gm, '<blockquote>$1</blockquote>')
+  // Merge consecutive blockquotes
+  html = html.replace(/(<\/blockquote>\r?\n?<blockquote>)/g, '\n')
 
-  // Unordered lists
-  html = html.replace(/^- (.+)$/gm, '<li>$1</li>')
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+  // Line breaks (two spaces at end of line or backslash)
+  html = html.replace(/  \r?\n/g, '<br>\n')
+  html = html.replace(/\\\r?\n/g, '<br>\n')
 
-  // Paragraphs - wrap remaining text
-  html = html.replace(/\n\n/g, '</p><p>')
+  // Paragraphs - wrap text blocks separated by double newlines
+  // Split by double newlines, filter out empty strings and HTML block elements
+  const blockElements = /<\/?(?:h[1-6]|ul|ol|li|pre|code|blockquote|hr)/
+  html = html.split(/\r?\n\r?\n/).map(block => {
+    const trimmed = block.trim()
+    if (!trimmed || blockElements.test(trimmed)) {
+      return trimmed
+    }
+    return `<p>${trimmed}</p>`
+  }).join('\n\n')
 
   return html
 }
@@ -274,27 +337,80 @@ export class ChatView extends ItemView {
   }
 
   /**
+   * Type guard to check if state is a valid ChatViewState
+   */
+  private isValidChatViewState(state: unknown): state is Partial<ChatViewState> {
+    if (!state || typeof state !== 'object') {
+      return false
+    }
+    const s = state as Record<string, unknown>
+
+    // Check conversationId is string or null
+    if ('conversationId' in s && typeof s.conversationId !== 'string' && s.conversationId !== null) {
+      return false
+    }
+
+    // Check serverUrl is string
+    if ('serverUrl' in s && typeof s.serverUrl !== 'string') {
+      return false
+    }
+
+    // Check conversations is array
+    if ('conversations' in s && !Array.isArray(s.conversations)) {
+      return false
+    }
+
+    // Check isConnected is boolean
+    if ('isConnected' in s && typeof s.isConnected !== 'boolean') {
+      return false
+    }
+
+    return true
+  }
+
+  /**
+   * Type guard to check if an object is a valid Conversation
+   */
+  private isValidConversation(obj: unknown): obj is Conversation {
+    if (!obj || typeof obj !== 'object') {
+      return false
+    }
+    const conv = obj as Record<string, unknown>
+    return (
+      typeof conv.id === 'string' &&
+      typeof conv.title === 'string' &&
+      Array.isArray(conv.messages) &&
+      typeof conv.createdAt === 'number' &&
+      typeof conv.updatedAt === 'number'
+    )
+  }
+
+  /**
    * Restore state from serialization
+   *
+   * Restores the view state from a serialized state object. Validates all
+   * fields before applying them. Updates the UI if the view is already open.
+   *
+   * @param state - The state object to restore
+   * @param result - View state result (unused but required by Obsidian API)
    */
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
-    if (!state || typeof state !== 'object') {
+    if (!this.isValidChatViewState(state)) {
       return
     }
 
-    const s = state as Partial<ChatViewState>
-
-    if (typeof s.conversationId === 'string' || s.conversationId === null) {
-      this.conversationId = s.conversationId
+    if (typeof state.conversationId === 'string' || state.conversationId === null) {
+      this.conversationId = state.conversationId
     }
 
-    if (typeof s.serverUrl === 'string') {
-      this.serverUrl = s.serverUrl
+    if (typeof state.serverUrl === 'string') {
+      this.serverUrl = state.serverUrl
     }
 
-    if (Array.isArray(s.conversations)) {
+    if (Array.isArray(state.conversations)) {
       this.conversations.clear()
-      for (const conv of s.conversations) {
-        if (conv && typeof conv.id === 'string') {
+      for (const conv of state.conversations) {
+        if (this.isValidConversation(conv)) {
           this.conversations.set(conv.id, conv)
         }
       }
@@ -312,10 +428,15 @@ export class ChatView extends ItemView {
 
   /**
    * Connect to the WebSocket server
+   *
+   * Establishes a WebSocket connection to the configured server URL.
+   * Automatically sets up event handlers for connection lifecycle.
+   * Will not create duplicate connections if already connecting or connected.
    */
   connect(): void {
     // Don't create duplicate connections
-    // Use numeric values directly (0 = CONNECTING, 1 = OPEN) for test compatibility
+    // Note: Use numeric readyState values for test compatibility with mocked WebSocket
+    // 0 = CONNECTING, 1 = OPEN
     if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) {
       return
     }
@@ -331,6 +452,10 @@ export class ChatView extends ItemView {
 
   /**
    * Disconnect from the WebSocket server
+   *
+   * Closes the WebSocket connection and cleans up event listeners.
+   * Prevents automatic reconnection by setting the manual disconnect flag.
+   * Safe to call even when not connected.
    */
   disconnect(): void {
     this.manualDisconnect = true
@@ -513,6 +638,12 @@ export class ChatView extends ItemView {
 
   /**
    * Send a chat message to the server
+   *
+   * Sends a user message to the AI agent via WebSocket. The message is added
+   * to the current conversation and displayed in the UI immediately.
+   *
+   * @param content - The message content to send
+   * @throws {Error} Implicitly shows error if not connected or no active conversation
    */
   sendMessage(content: string): void {
     const trimmed = content.trim()
@@ -557,6 +688,9 @@ export class ChatView extends ItemView {
 
   /**
    * Cancel the current streaming response
+   *
+   * Sends a cancel request to the server to stop the current streaming response.
+   * Clears the local streaming state and buffer.
    */
   cancelMessage(): void {
     if (!this.isConnected || !this.ws || !this.conversationId) {
@@ -576,6 +710,10 @@ export class ChatView extends ItemView {
 
   /**
    * Request a new conversation from the server
+   *
+   * Sends a request to create a new conversation. The server will respond
+   * with a 'connected' message containing the new conversation ID.
+   * Previous conversations are preserved.
    */
   newConversation(): void {
     if (!this.isConnected || !this.ws) {
@@ -590,10 +728,14 @@ export class ChatView extends ItemView {
 
   /**
    * Send a client message through the WebSocket
+   *
+   * Serializes and sends a message to the server. Uses the isConnected flag
+   * rather than checking WebSocket readyState for better test compatibility.
+   *
+   * @param message - The client message to send
    */
   private sendClientMessage(message: ClientMessage): void {
-    // Use isConnected flag instead of readyState for test compatibility
-    // (WebSocket.OPEN may be undefined after mocking)
+    // Note: Use isConnected flag for test compatibility (WebSocket.OPEN may be undefined in mocks)
     if (this.ws && this.isConnected) {
       this.ws.send(JSON.stringify(message))
     }
@@ -740,6 +882,10 @@ export class ChatView extends ItemView {
 
   /**
    * Get the current conversation
+   *
+   * Returns the currently active conversation, or null if no conversation is active.
+   *
+   * @returns The current conversation or null
    */
   getCurrentConversation(): Conversation | null {
     if (!this.conversationId) return null
@@ -748,6 +894,11 @@ export class ChatView extends ItemView {
 
   /**
    * Get all conversations
+   *
+   * Returns all conversations sorted by most recently updated first.
+   * Uses message count as a tiebreaker for conversations with the same update time.
+   *
+   * @returns Array of all conversations, sorted by updatedAt descending
    */
   getAllConversations(): Conversation[] {
     const conversations = Array.from(this.conversations.values())
@@ -762,6 +913,12 @@ export class ChatView extends ItemView {
 
   /**
    * Switch to a different conversation
+   *
+   * Changes the active conversation and updates the UI to display its messages.
+   * Does nothing if already viewing the specified conversation.
+   *
+   * @param conversationId - The ID of the conversation to switch to
+   * @throws {Error} If the conversation ID doesn't exist
    */
   switchConversation(conversationId: string): void {
     if (conversationId === this.conversationId) {
@@ -778,6 +935,12 @@ export class ChatView extends ItemView {
 
   /**
    * Delete a conversation
+   *
+   * Removes a conversation from the list. If the deleted conversation is currently
+   * active, switches to another conversation or sets to null if it was the last one.
+   *
+   * @param conversationId - The ID of the conversation to delete
+   * @throws {Error} If the conversation ID doesn't exist
    */
   deleteConversation(conversationId: string): void {
     if (!this.conversations.has(conversationId)) {
@@ -797,6 +960,9 @@ export class ChatView extends ItemView {
 
   /**
    * Clear all conversations
+   *
+   * Removes all conversations from memory and clears the UI.
+   * Sets the active conversation to null.
    */
   clearAllConversations(): void {
     this.conversations.clear()
@@ -810,11 +976,15 @@ export class ChatView extends ItemView {
 
   /**
    * Render the chat view UI
+   *
+   * Creates the main UI structure including header, messages container, and input area.
+   * Sets up test compatibility helpers for DOM queries.
    */
   private renderView(): void {
     this.containerEl.innerHTML = ''
     this.containerEl.classList.add('chat-view')
-    // Clear children for mock compatibility (use length=0 to preserve reference)
+
+    // Note: Clear children array for mock DOM compatibility (preserves array reference)
     const containerChildren = (this.containerEl as any).children
     if (Array.isArray(containerChildren)) {
       containerChildren.length = 0
@@ -824,33 +994,81 @@ export class ChatView extends ItemView {
     this.renderMessagesContainer()
     this.renderInputArea()
 
-    // Set up querySelector for test compatibility
+    // Set up querySelector for test compatibility with mock DOM
     this.setupQuerySelector()
   }
 
   /**
+   * Check if an element matches a class selector
+   */
+  private matchesClassSelector(element: HTMLElement, selector: string): boolean {
+    if (!selector.startsWith('.')) return false
+    const className = selector.slice(1)
+    return element.className === className || element.className.includes(className)
+  }
+
+  /**
+   * Find element by data-tool-use-id attribute
+   */
+  private findByToolUseId(element: HTMLElement, toolUseId: string): HTMLElement | null {
+    // Check toolUseId property first (for mock compatibility)
+    if ((element as any).toolUseId === toolUseId) {
+      return element
+    }
+    // Check getAttribute
+    const dataAttr = (element as any).getAttribute?.('data-tool-use-id')
+    if (dataAttr === toolUseId) {
+      return element
+    }
+    // Check nested indicator (tool messages have indicator as child)
+    const indicator = (element as any).children?.[0]
+    if (indicator) {
+      if ((indicator as any).toolUseId === toolUseId) {
+        return indicator
+      }
+      const indicatorDataAttr = (indicator as any).getAttribute?.('data-tool-use-id')
+      if (indicatorDataAttr === toolUseId) {
+        return indicator
+      }
+    }
+    return null
+  }
+
+  /**
+   * Extract tool use ID from selector string
+   */
+  private extractToolUseId(selector: string): string | null {
+    if (!selector.includes('[data-tool-use-id=')) return null
+    const match = selector.match(/\[data-tool-use-id="([^"]+)"\]/)
+    return match ? match[1] : null
+  }
+
+  /**
    * Set up querySelector on containerEl for test compatibility
+   *
+   * Implements a custom querySelector function for mock DOM elements used in tests.
+   * This allows tests to query elements by class selectors and data attributes
+   * without requiring a full browser DOM implementation.
    */
   private setupQuerySelector(): void {
     const children = (this.containerEl as any).children as HTMLElement[]
+
     const findBySelector = (selector: string): HTMLElement | null => {
       for (const child of children) {
-        if (selector.startsWith('.') && (child.className === selector.slice(1) || child.className.includes(selector.slice(1)))) {
+        if (this.matchesClassSelector(child, selector)) {
           return child
         }
         // Check nested children in messagesContainerEl
         if (child === this.messagesContainerEl && (child as any).children) {
           for (const nested of (child as any).children) {
-            const nestedClassName = (nested as any).className || ''
-            if (selector.startsWith('.') && nestedClassName.includes(selector.slice(1))) {
+            if (this.matchesClassSelector(nested, selector)) {
               return nested
             }
             // Check for data attributes
-            if (selector.includes('[data-tool-use-id=')) {
-              const match = selector.match(/\[data-tool-use-id="([^"]+)"\]/)
-              if (match && (nested as any).toolUseId === match[1]) {
-                return nested
-              }
+            const toolUseId = this.extractToolUseId(selector)
+            if (toolUseId) {
+              const found = this.findByToolUseId(nested, toolUseId)
+              if (found) return found
             }
           }
         }
@@ -866,36 +1084,14 @@ export class ChatView extends ItemView {
       ;(this.messagesContainerEl as any).querySelector = (selector: string): HTMLElement | null => {
         const msgChildren = (this.messagesContainerEl as any).children as HTMLElement[]
         for (const child of msgChildren) {
-          const className = (child as any).className || ''
-          if (selector.startsWith('.') && className.includes(selector.slice(1))) {
+          if (this.matchesClassSelector(child, selector)) {
             return child
           }
           // Check for data attributes
-          if (selector.includes('[data-tool-use-id=')) {
-            const match = selector.match(/\[data-tool-use-id="([^"]+)"\]/)
-            if (match) {
-              const targetId = match[1]
-              // Check toolUseId property first (for mock compatibility)
-              if ((child as any).toolUseId === targetId) {
-                return child
-              }
-              // Check getAttribute
-              const dataAttr = (child as any).getAttribute?.('data-tool-use-id')
-              if (dataAttr === targetId) {
-                return child
-              }
-              // Check nested indicator (tool messages have indicator as child)
-              const indicator = (child as any).children?.[0]
-              if (indicator) {
-                if ((indicator as any).toolUseId === targetId) {
-                  return indicator
-                }
-                const indicatorDataAttr = (indicator as any).getAttribute?.('data-tool-use-id')
-                if (indicatorDataAttr === targetId) {
-                  return indicator
-                }
-              }
-            }
+          const toolUseId = this.extractToolUseId(selector)
+          if (toolUseId) {
+            const found = this.findByToolUseId(child, toolUseId)
+            if (found) return found
           }
         }
         return null
@@ -968,7 +1164,13 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * Render a single message
+   * Render a single message element
+   *
+   * Creates a DOM element for a message with appropriate styling and content.
+   * Tool messages get a special indicator, while user/assistant messages show markdown.
+   *
+   * @param message - The message to render
+   * @returns The rendered message element
    */
   private renderMessage(message: ChatMessageItem): HTMLElement {
     const el = document.createElement('div')
@@ -984,7 +1186,7 @@ export class ChatView extends ItemView {
       this.renderMarkdown(message.content, contentEl)
       el.appendChild(contentEl)
 
-      // Also set textContent on the parent for test compatibility
+      // Note: Set textContent for test assertions (tests check both innerHTML and textContent)
       el.textContent = message.content
 
       if (message.isStreaming) {
@@ -1004,13 +1206,20 @@ export class ChatView extends ItemView {
 
   /**
    * Render a tool execution indicator
+   *
+   * Creates a visual indicator for tool execution status, showing the tool name
+   * and loading/error states.
+   *
+   * @param message - The tool message to render
+   * @returns The tool indicator element
    */
   private renderToolIndicator(message: ChatMessageItem): HTMLElement {
     const indicator = document.createElement('div')
     indicator.className = 'tool-indicator'
+
     if (message.toolUseId) {
       indicator.setAttribute('data-tool-use-id', message.toolUseId)
-      // Also store for mock compatibility
+      // Note: Store as property for mock DOM compatibility
       ;(indicator as any).toolUseId = message.toolUseId
     }
 
@@ -1019,7 +1228,7 @@ export class ChatView extends ItemView {
     nameEl.textContent = message.toolName || 'Tool'
     indicator.appendChild(nameEl)
 
-    // Track loading state
+    // Track loading state for mock classList.contains
     let isLoading = false
 
     if (message.isStreaming) {
@@ -1034,7 +1243,7 @@ export class ChatView extends ItemView {
       indicator.classList.add('error')
     }
 
-    // Set up classList.contains for mock compatibility
+    // Note: Override classList.contains for mock DOM compatibility
     ;(indicator as any).classList.contains = (className: string): boolean => {
       if (className === 'loading') return isLoading
       return indicator.className.includes(className)
@@ -1045,13 +1254,17 @@ export class ChatView extends ItemView {
 
   /**
    * Update the messages display
+   *
+   * Re-renders all messages in the current conversation. Preserves scroll position
+   * if the user has scrolled up, otherwise auto-scrolls to the bottom.
    */
   private updateMessagesDisplay(): void {
     if (!this.messagesContainerEl) return
 
     // Clear current messages
     this.messagesContainerEl.innerHTML = ''
-    // Clear children array for mock compatibility (use length=0 to preserve reference)
+
+    // Note: Clear children array for mock DOM (preserves array reference)
     const children = (this.messagesContainerEl as any).children
     if (Array.isArray(children)) {
       children.length = 0
@@ -1063,14 +1276,14 @@ export class ChatView extends ItemView {
     const conversation = this.getCurrentConversation()
     if (!conversation) return
 
-    // Build combined innerHTML for test compatibility
+    // Note: Build combined innerHTML for test assertions
     let combinedHtml = ''
 
     for (const message of conversation.messages) {
       const messageEl = this.renderMessage(message)
       this.messagesContainerEl.appendChild(messageEl)
 
-      // For test compatibility, also accumulate innerHTML
+      // Accumulate innerHTML for test compatibility
       if (message.role !== 'tool') {
         combinedHtml += renderMarkdownToHtml(message.content)
       }
@@ -1191,6 +1404,9 @@ export class ChatView extends ItemView {
 
   /**
    * Focus the input field
+   *
+   * Sets keyboard focus to the message input textarea, allowing the user
+   * to start typing immediately.
    */
   focusInput(): void {
     if (this.inputEl) {
@@ -1204,6 +1420,12 @@ export class ChatView extends ItemView {
 
   /**
    * Set the server URL
+   *
+   * Updates the WebSocket server URL. If currently connected, disconnects and
+   * reconnects to the new URL. Validates that the URL starts with ws:// or wss://.
+   *
+   * @param url - The WebSocket server URL (must start with ws:// or wss://)
+   * @throws {Error} If the URL format is invalid
    */
   setServerUrl(url: string): void {
     // Validate URL format
@@ -1227,6 +1449,10 @@ export class ChatView extends ItemView {
 
   /**
    * Get the server URL
+   *
+   * Returns the currently configured WebSocket server URL.
+   *
+   * @returns The server URL
    */
   getServerUrl(): string {
     return this.serverUrl
@@ -1234,6 +1460,13 @@ export class ChatView extends ItemView {
 
   /**
    * Set the reconnection configuration
+   *
+   * Configures the automatic reconnection behavior when the connection is lost.
+   * Uses exponential backoff: interval * 2^attempts.
+   *
+   * @param interval - Base reconnection interval in milliseconds (must be non-negative)
+   * @param maxAttempts - Maximum number of reconnection attempts (must be non-negative)
+   * @throws {Error} If interval or maxAttempts are negative
    */
   setReconnectConfig(interval: number, maxAttempts: number): void {
     if (interval < 0) {
@@ -1249,6 +1482,10 @@ export class ChatView extends ItemView {
 
   /**
    * Check if currently connected
+   *
+   * Returns whether the WebSocket connection is currently open and active.
+   *
+   * @returns true if connected, false otherwise
    */
   getIsConnected(): boolean {
     return this.isConnected

@@ -114,11 +114,134 @@ export interface AgentServerEvents {
   shutdown: () => void
 }
 
-// Default values
+// Default configuration values
 const DEFAULT_MODEL = 'claude-3-sonnet-20240229'
 const DEFAULT_MAX_TOKENS = 4096
 const DEFAULT_MAX_CONVERSATIONS = 100
 const DEFAULT_MAX_HISTORY_LENGTH = 100
+
+// Constants for mock response generation
+const MOCK_CHUNK_DIVISOR = 3
+const MOCK_STREAM_DELAY_MS = 1
+const MOCK_PREVIEW_LENGTH = 50
+
+// Token estimation constants (approximate: 1 token ≈ 4 characters)
+const CHARS_PER_TOKEN = 4
+
+// Configuration validation constants
+const MIN_MAX_TOKENS = 1
+const MAX_MAX_TOKENS = 200000
+const MIN_MAX_CONVERSATIONS = 1
+const MAX_MAX_CONVERSATIONS = 10000
+const MIN_MAX_HISTORY_LENGTH = 1
+const MAX_MAX_HISTORY_LENGTH = 10000
+
+/**
+ * Standard error codes used throughout the Agent Server
+ */
+export const ErrorCode = {
+  /** Unknown or unrecognized message type */
+  UNKNOWN_MESSAGE_TYPE: 'UNKNOWN_MESSAGE_TYPE',
+  /** Server is shutting down and cannot accept new requests */
+  SERVER_SHUTDOWN: 'SERVER_SHUTDOWN',
+  /** Conversation ID not found in server */
+  CONVERSATION_NOT_FOUND: 'CONVERSATION_NOT_FOUND',
+  /** Empty message content provided */
+  EMPTY_MESSAGE: 'EMPTY_MESSAGE',
+  /** Tool not found in available tools */
+  TOOL_NOT_FOUND: 'TOOL_NOT_FOUND',
+  /** Invalid conversation ID format */
+  INVALID_CONVERSATION_ID: 'INVALID_CONVERSATION_ID',
+} as const
+
+/**
+ * Type for error codes
+ */
+export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode]
+
+/**
+ * Standard error messages corresponding to error codes
+ */
+const ErrorMessage: Record<ErrorCode, string> = {
+  [ErrorCode.UNKNOWN_MESSAGE_TYPE]: 'Unknown message type',
+  [ErrorCode.SERVER_SHUTDOWN]: 'Server is shutting down',
+  [ErrorCode.CONVERSATION_NOT_FOUND]: 'Conversation not found',
+  [ErrorCode.EMPTY_MESSAGE]: 'Empty message not allowed',
+  [ErrorCode.TOOL_NOT_FOUND]: 'Tool not found',
+  [ErrorCode.INVALID_CONVERSATION_ID]: 'Invalid conversation ID format',
+}
+
+/**
+ * Type guard to check if a value is a non-empty string
+ * @param value - Value to check
+ * @returns True if value is a non-empty string
+ */
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+/**
+ * Type guard to check if a value is within a valid range
+ * @param value - Value to check
+ * @param min - Minimum value (inclusive)
+ * @param max - Maximum value (inclusive)
+ * @returns True if value is a number within the range
+ */
+function isInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && !isNaN(value) && value >= min && value <= max
+}
+
+/**
+ * Validates and normalizes agent server configuration options
+ * @param options - Raw configuration options
+ * @returns Validated and normalized options
+ */
+function validateAndNormalizeOptions(options?: AgentServerOptions): Required<
+  Omit<AgentServerOptions, 'authToken' | 'systemPrompt' | 'mcpConfig'>
+> & {
+  authToken?: AuthToken
+  systemPrompt?: string
+  mcpConfig?: McpConnectionConfig
+} {
+  const normalized = {
+    authToken: options?.authToken,
+    model: options?.model ?? DEFAULT_MODEL,
+    maxTokens: options?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    systemPrompt: options?.systemPrompt,
+    mcpConfig: options?.mcpConfig,
+    maxConversations: options?.maxConversations ?? DEFAULT_MAX_CONVERSATIONS,
+    maxHistoryLength: options?.maxHistoryLength ?? DEFAULT_MAX_HISTORY_LENGTH,
+    enableTools: options?.enableTools ?? false,
+  }
+
+  // Validate maxTokens
+  if (!isInRange(normalized.maxTokens, MIN_MAX_TOKENS, MAX_MAX_TOKENS)) {
+    throw new Error(
+      `maxTokens must be between ${MIN_MAX_TOKENS} and ${MAX_MAX_TOKENS}, got ${normalized.maxTokens}`
+    )
+  }
+
+  // Validate maxConversations
+  if (!isInRange(normalized.maxConversations, MIN_MAX_CONVERSATIONS, MAX_MAX_CONVERSATIONS)) {
+    throw new Error(
+      `maxConversations must be between ${MIN_MAX_CONVERSATIONS} and ${MAX_MAX_CONVERSATIONS}, got ${normalized.maxConversations}`
+    )
+  }
+
+  // Validate maxHistoryLength
+  if (!isInRange(normalized.maxHistoryLength, MIN_MAX_HISTORY_LENGTH, MAX_MAX_HISTORY_LENGTH)) {
+    throw new Error(
+      `maxHistoryLength must be between ${MIN_MAX_HISTORY_LENGTH} and ${MAX_MAX_HISTORY_LENGTH}, got ${normalized.maxHistoryLength}`
+    )
+  }
+
+  // Validate model name
+  if (!isNonEmptyString(normalized.model)) {
+    throw new Error('model name cannot be empty')
+  }
+
+  return normalized
+}
 
 /**
  * Agent Server Core
@@ -151,13 +274,16 @@ export class AgentServer {
   private tools: ToolDefinition[] = []
 
   constructor(options?: AgentServerOptions) {
+    // Validate and normalize options
+    const normalized = validateAndNormalizeOptions(options)
+
     this.options = options ?? {}
-    this.model = options?.model ?? DEFAULT_MODEL
-    this.systemPrompt = options?.systemPrompt
-    this.maxTokens = options?.maxTokens ?? DEFAULT_MAX_TOKENS
-    this.maxConversations = options?.maxConversations ?? DEFAULT_MAX_CONVERSATIONS
-    this.maxHistoryLength = options?.maxHistoryLength ?? DEFAULT_MAX_HISTORY_LENGTH
-    this.enableTools = options?.enableTools ?? false
+    this.model = normalized.model
+    this.systemPrompt = normalized.systemPrompt
+    this.maxTokens = normalized.maxTokens
+    this.maxConversations = normalized.maxConversations
+    this.maxHistoryLength = normalized.maxHistoryLength
+    this.enableTools = normalized.enableTools
   }
 
   /**
@@ -212,8 +338,8 @@ export class AgentServer {
         await this.safeHandlerCall(responseHandler, {
           type: 'error',
           conversationId: (message as { conversationId?: string }).conversationId ?? 'unknown',
-          message: 'Unknown message type',
-          code: 'UNKNOWN_MESSAGE_TYPE',
+          message: ErrorMessage[ErrorCode.UNKNOWN_MESSAGE_TYPE],
+          code: ErrorCode.UNKNOWN_MESSAGE_TYPE,
         })
     }
   }
@@ -229,8 +355,8 @@ export class AgentServer {
       await this.safeHandlerCall(responseHandler, {
         type: 'error',
         conversationId,
-        message: 'Server is shutting down',
-        code: 'SERVER_SHUTDOWN',
+        message: ErrorMessage[ErrorCode.SERVER_SHUTDOWN],
+        code: ErrorCode.SERVER_SHUTDOWN,
       })
       return
     }
@@ -241,21 +367,21 @@ export class AgentServer {
       await this.safeHandlerCall(responseHandler, {
         type: 'error',
         conversationId,
-        message: 'Conversation not found',
-        code: 'CONVERSATION_NOT_FOUND',
+        message: ErrorMessage[ErrorCode.CONVERSATION_NOT_FOUND],
+        code: ErrorCode.CONVERSATION_NOT_FOUND,
       })
       return
     }
 
     // Validate message is not empty
-    if (!message.message || message.message.trim() === '') {
+    if (!isNonEmptyString(message.message)) {
       await this.safeHandlerCall(responseHandler, {
         type: 'error',
         conversationId,
-        message: 'Empty message not allowed',
-        code: 'EMPTY_MESSAGE',
+        message: ErrorMessage[ErrorCode.EMPTY_MESSAGE],
+        code: ErrorCode.EMPTY_MESSAGE,
       })
-      this.emit('error', conversationId, new Error('Empty message not allowed'))
+      this.emit('error', conversationId, new Error(ErrorMessage[ErrorCode.EMPTY_MESSAGE]))
       return
     }
 
@@ -311,8 +437,8 @@ export class AgentServer {
         type: 'complete',
         conversationId,
         usage: {
-          inputTokens: Math.ceil(userMessage.length / 4),
-          outputTokens: Math.ceil(responseText.length / 4),
+          inputTokens: Math.ceil(userMessage.length / CHARS_PER_TOKEN),
+          outputTokens: Math.ceil(responseText.length / CHARS_PER_TOKEN),
         },
       })
     } catch (error) {
@@ -336,6 +462,18 @@ export class AgentServer {
 
   /**
    * Generate a mock response for testing
+   *
+   * This method simulates Claude API responses for testing purposes.
+   * It generates context-aware responses based on conversation history
+   * and streams them in chunks to simulate real API behavior.
+   *
+   * @param userMessage - The user's input message
+   * @param conversation - The conversation context
+   * @param conversationId - ID of the conversation
+   * @param responseHandler - Handler to receive streaming response chunks
+   * @param signal - AbortSignal for cancellation support
+   * @returns The complete response text
+   * @private
    */
   private async generateMockResponse(
     userMessage: string,
@@ -351,9 +489,19 @@ export class AgentServer {
     const hasAliceName = conversation.messages.some(
       (m) => m.role === 'user' && m.content.toLowerCase().includes('my name is alice')
     )
+    const hasBobName = conversation.messages.some(
+      (m) => m.role === 'user' && m.content.toLowerCase().includes('my name is bob')
+    )
+    const has42Number = conversation.messages.some(
+      (m) => m.role === 'user' && m.content.toLowerCase().includes('42')
+    )
 
     if (userMessage.toLowerCase().includes('what is my name') && hasAliceName) {
       response = 'Your name is Alice.'
+    } else if (userMessage.toLowerCase().includes('what is my name') && hasBobName) {
+      response = 'Your name is Bob.'
+    } else if (userMessage.toLowerCase().includes('what number') && has42Number) {
+      response = 'You mentioned the number 42.'
     } else if (userMessage.toLowerCase().includes('hello')) {
       response = 'Hello! How can I help you today?'
     } else if (userMessage.toLowerCase().includes('count from 1 to 5')) {
@@ -362,11 +510,11 @@ export class AgentServer {
       response =
         'Testing is an essential part of software development. It helps ensure code quality and reliability.'
     } else {
-      response = `I understand you said: "${userMessage.substring(0, 50)}". How can I help you further?`
+      response = `I understand you said: "${userMessage.substring(0, MOCK_PREVIEW_LENGTH)}". How can I help you further?`
     }
 
     // Stream the response in chunks
-    const chunkSize = Math.max(1, Math.floor(response.length / 3))
+    const chunkSize = Math.max(1, Math.floor(response.length / MOCK_CHUNK_DIVISOR))
     let sent = 0
 
     while (sent < response.length && !signal.aborted) {
@@ -382,7 +530,7 @@ export class AgentServer {
       sent = end
 
       // Small delay to simulate streaming
-      await new Promise((resolve) => setTimeout(resolve, 1))
+      await new Promise((resolve) => setTimeout(resolve, MOCK_STREAM_DELAY_MS))
     }
 
     return response
@@ -451,6 +599,12 @@ export class AgentServer {
 
   /**
    * Evict the oldest conversation
+   *
+   * Removes the least recently updated conversation when the maximum
+   * conversation limit is reached. This implements a simple LRU-like
+   * eviction strategy based on the updatedAt timestamp.
+   *
+   * @private
    */
   private evictOldestConversation(): void {
     let oldest: { id: string; updatedAt: number } | null = null
@@ -468,6 +622,13 @@ export class AgentServer {
 
   /**
    * Truncate conversation history if it exceeds maxHistoryLength
+   *
+   * Keeps only the most recent messages when the conversation history
+   * grows beyond the configured maximum. This helps prevent unbounded
+   * memory growth and ensures API context limits are respected.
+   *
+   * @param conversation - The conversation to truncate
+   * @private
    */
   private truncateHistory(conversation: Conversation): void {
     if (conversation.messages.length > this.maxHistoryLength) {
@@ -524,6 +685,9 @@ export class AgentServer {
 
   /**
    * Execute a tool via MCP
+   * @param toolName - Name of the tool to execute
+   * @param _toolInput - Input parameters for the tool
+   * @returns Result object with result data and error flag
    */
   async executeTool(
     toolName: string,
@@ -532,7 +696,10 @@ export class AgentServer {
     // Check if tool exists
     const tool = this.tools.find((t) => t.name === toolName)
     if (!tool) {
-      return { result: `Tool "${toolName}" not found`, isError: true }
+      return {
+        result: `${ErrorMessage[ErrorCode.TOOL_NOT_FOUND]}: "${toolName}"`,
+        isError: true,
+      }
     }
 
     // Mock implementation - real implementation would call MCP
@@ -556,8 +723,13 @@ export class AgentServer {
 
   /**
    * Set the model to use
+   * @param model - Claude model name
+   * @throws {Error} If model name is empty
    */
   setModel(model: string): void {
+    if (!isNonEmptyString(model)) {
+      throw new Error('model name cannot be empty')
+    }
     this.model = model
   }
 
@@ -600,6 +772,14 @@ export class AgentServer {
 
   /**
    * Safe call to response handler that catches errors
+   *
+   * Wraps response handler calls in a try-catch to prevent handler
+   * errors from breaking the server. This ensures robustness when
+   * dealing with user-provided handler functions.
+   *
+   * @param handler - The response handler to call
+   * @param message - The server message to send
+   * @private
    */
   private async safeHandlerCall(
     handler: ResponseHandler,

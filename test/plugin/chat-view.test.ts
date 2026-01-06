@@ -703,13 +703,27 @@ describe('ChatView', () => {
         view.setReconnectConfig(100, 3)
         view.connect()
 
-        // Simulate 4 connection failures
-        for (let i = 0; i < 4; i++) {
-          mockWs.triggerClose(1006, 'Connection failed')
-          vi.advanceTimersByTime(100)
-        }
+        // Simulate connection failures with exponential backoff timing
+        // Close 1: schedules reconnect at 100ms (100 * 2^0)
+        mockWs.triggerClose(1006, 'Connection failed')
+        vi.advanceTimersByTime(100)
+        expect(WebSocket).toHaveBeenCalledTimes(2) // 1 initial + 1 reconnect
 
-        // Should have only attempted 3 reconnects
+        // Close 2: schedules reconnect at 200ms (100 * 2^1)
+        mockWs.triggerClose(1006, 'Connection failed')
+        vi.advanceTimersByTime(200)
+        expect(WebSocket).toHaveBeenCalledTimes(3)
+
+        // Close 3: schedules reconnect at 400ms (100 * 2^2)
+        mockWs.triggerClose(1006, 'Connection failed')
+        vi.advanceTimersByTime(400)
+        expect(WebSocket).toHaveBeenCalledTimes(4) // 1 initial + 3 reconnects
+
+        // Close 4: should NOT reconnect (max attempts reached)
+        mockWs.triggerClose(1006, 'Connection failed')
+        vi.advanceTimersByTime(1000) // Wait plenty of time
+
+        // Should have only attempted 3 reconnects total
         expect(WebSocket).toHaveBeenCalledTimes(4) // 1 initial + 3 reconnects
         vi.useRealTimers()
       })
@@ -718,18 +732,28 @@ describe('ChatView', () => {
         vi.useFakeTimers()
         view.setReconnectConfig(1000, 5)
         view.connect()
+        expect(WebSocket).toHaveBeenCalledTimes(1)
 
-        // First close
+        // First close - delay is 1000ms (1000 * 2^0)
+        mockWs.triggerClose(1006)
+        vi.advanceTimersByTime(999)
+        expect(WebSocket).toHaveBeenCalledTimes(1) // Not yet
+        vi.advanceTimersByTime(1)
+        expect(WebSocket).toHaveBeenCalledTimes(2) // Now (after 1000ms)
+
+        // Second close - delay is 2000ms (1000 * 2^1)
         mockWs.triggerClose(1006)
         vi.advanceTimersByTime(1000)
-        expect(WebSocket).toHaveBeenCalledTimes(2)
+        expect(WebSocket).toHaveBeenCalledTimes(2) // Not yet (only 1000ms)
+        vi.advanceTimersByTime(1000)
+        expect(WebSocket).toHaveBeenCalledTimes(3) // Now (after 2000ms)
 
-        // Second close - should wait longer
+        // Third close - delay is 4000ms (1000 * 2^2)
         mockWs.triggerClose(1006)
-        vi.advanceTimersByTime(1000)
-        expect(WebSocket).toHaveBeenCalledTimes(2) // Not yet
-        vi.advanceTimersByTime(1000)
-        expect(WebSocket).toHaveBeenCalledTimes(3) // Now
+        vi.advanceTimersByTime(2000)
+        expect(WebSocket).toHaveBeenCalledTimes(3) // Not yet (only 2000ms)
+        vi.advanceTimersByTime(2000)
+        expect(WebSocket).toHaveBeenCalledTimes(4) // Now (after 4000ms)
 
         vi.useRealTimers()
       })
@@ -1990,6 +2014,7 @@ describe('ChatView', () => {
       })
 
       it('should update conversation updatedAt on new message', () => {
+        vi.useFakeTimers()
         mockWs.triggerMessage(
           JSON.stringify({
             type: 'connected',
@@ -2005,6 +2030,7 @@ describe('ChatView', () => {
 
         const updatedTime = view.getCurrentConversation()?.updatedAt
         expect(updatedTime).toBeGreaterThan(initialTime!)
+        vi.useRealTimers()
       })
 
       it('should preserve createdAt timestamp', () => {
