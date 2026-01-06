@@ -1,5 +1,6 @@
 import type { Backend, TFile, TFolder, TAbstractFile, FileStat } from '../types.js'
 import { Events, EventRef } from './events.js'
+import { LRUCache } from './lru-cache.js'
 
 interface ExtendedBackend extends Backend {
   files?: Map<string, string | ArrayBuffer>
@@ -7,24 +8,59 @@ interface ExtendedBackend extends Backend {
 }
 
 /**
+ * Options for configuring the Vault's caching behavior.
+ */
+export interface VaultOptions {
+  /** Maximum number of file contents to cache (default: 500) */
+  contentCacheSize?: number
+  /** Maximum number of file metadata entries to cache (default: 5000) */
+  fileCacheSize?: number
+  /** Whether to enable debouncing of file watch events (default: false) */
+  enableWatchDebounce?: boolean
+  /** Debounce delay in milliseconds for file watch events (default: 100) */
+  watchDebounceMs?: number
+}
+
+/**
+ * Cache statistics for monitoring vault performance.
+ */
+export interface CacheStats {
+  contentCache: { size: number; capacity: number }
+  fileCache: { size: number; capacity: number }
+  folderCache: { size: number }
+  pathToParentCache: { size: number }
+}
+
+/**
  * Vault provides file management for an Obsidian-compatible vault.
  * Wraps a backend storage system and provides caching, event emission, and folder management.
  */
 export class Vault extends Events {
-  private fileCache = new Map<string, TFile>()
+  private fileCache: LRUCache<string, TFile>
   private folderCache = new Map<string, TFolder>()
-  private contentCache = new Map<string, string>()
+  private contentCache: LRUCache<string, string>
+  private pathToParentCache = new Map<string, string>()
   private syncScanned = false
   private backendCreatesInProgress = new Set<string>()
   private backendModifiesInProgress = new Set<string>()
   private backendDeletesInProgress = new Set<string>()
+  private options: Required<VaultOptions>
 
   /**
    * Creates a new Vault instance.
    * @param backend - The storage backend to use (filesystem, memory, or REST).
+   * @param options - Optional configuration for caching behavior.
    */
-  constructor(private backend: Backend) {
+  constructor(private backend: Backend, options: VaultOptions = {}) {
     super()
+    this.options = {
+      contentCacheSize: options.contentCacheSize ?? 500,
+      fileCacheSize: options.fileCacheSize ?? 5000,
+      enableWatchDebounce: options.enableWatchDebounce ?? false,
+      watchDebounceMs: options.watchDebounceMs ?? 100
+    }
+    this.fileCache = new LRUCache<string, TFile>(this.options.fileCacheSize)
+    this.contentCache = new LRUCache<string, string>(this.options.contentCacheSize)
     // Listen to backend events if supported
     this.setupBackendListeners()
   }
@@ -196,6 +232,8 @@ export class Vault extends Events {
       if (parent && !parent.children.some(c => c.path === file.path)) {
         parent.children.push(file)
       }
+      // Cache the parent path
+      this.pathToParentCache.set(file.path, parentPath)
     }
 
     // Add folders to their parent folders
@@ -206,6 +244,8 @@ export class Vault extends Events {
       if (parent && !parent.children.some(c => c.path === folder.path)) {
         parent.children.push(folder)
       }
+      // Cache the parent path
+      this.pathToParentCache.set(folder.path, parentPath)
     }
   }
 
@@ -497,6 +537,8 @@ export class Vault extends Events {
     try {
       await this.backend.delete(file.path)
       this.fileCache.delete(file.path)
+      // Invalidate content cache
+      this.contentCache.delete(file.path)
 
       // Remove from parent folder
       const parentPath = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : ''
@@ -594,6 +636,49 @@ export class Vault extends Events {
     } finally {
       this.backendCreatesInProgress.delete(newPath)
     }
+  }
+
+  /**
+   * Gets cache statistics for monitoring vault performance.
+   * @returns An object containing size and capacity information for all caches.
+   */
+  getCacheStats(): CacheStats {
+    return {
+      contentCache: {
+        size: this.contentCache.size,
+        capacity: this.contentCache.capacity
+      },
+      fileCache: {
+        size: this.fileCache.size,
+        capacity: this.fileCache.capacity
+      },
+      folderCache: {
+        size: this.folderCache.size
+      },
+      pathToParentCache: {
+        size: this.pathToParentCache.size
+      }
+    }
+  }
+
+  /**
+   * Clears all caches in the vault.
+   * This includes file cache, folder cache, content cache, and path-to-parent cache.
+   */
+  clearCaches(): void {
+    this.fileCache.clear()
+    this.folderCache.clear()
+    this.contentCache.clear()
+    this.pathToParentCache.clear()
+    this.syncScanned = false
+  }
+
+  /**
+   * Clears only the content cache.
+   * File and folder metadata caches are preserved.
+   */
+  clearContentCache(): void {
+    this.contentCache.clear()
   }
 
 }

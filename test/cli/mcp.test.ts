@@ -31,12 +31,40 @@ async function cleanupTempVault(vaultPath: string): Promise<void> {
 }
 
 /**
+ * Test helper to wait for stderr to contain a specific string
+ * @param proc - Child process to read from
+ * @param text - Text to wait for
+ * @param timeout - Timeout in milliseconds
+ */
+async function waitForStderr(proc: ChildProcess, text: string, timeout: number = 15000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let buffer = ''
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`Timeout waiting for stderr to contain: ${text}`))
+    }, timeout)
+
+    proc.stderr?.on('data', (data: Buffer) => {
+      buffer += data.toString()
+      if (buffer.includes(text)) {
+        clearTimeout(timeoutId)
+        resolve()
+      }
+    })
+
+    proc.on('error', (err) => {
+      clearTimeout(timeoutId)
+      reject(err)
+    })
+  })
+}
+
+/**
  * Test helper to read stdout from a process until we get a complete JSON response
  * @param proc - Child process to read from
  * @param timeout - Timeout in milliseconds
  * @returns Promise resolving to the JSON response string
  */
-async function readStdout(proc: ChildProcess, timeout: number = 5000): Promise<string> {
+async function readStdout(proc: ChildProcess, timeout: number = 15000): Promise<string> {
   return new Promise((resolve, reject) => {
     let buffer = ''
     const timeoutId = setTimeout(() => {
@@ -92,10 +120,13 @@ describe('mcp command', () => {
     }
   })
 
-  it('should start MCP server on stdio', async () => {
+  it('should start MCP server on stdio', { timeout: 30000 }, async () => {
     const proc = spawn('npx', ['tsx', cliPath, 'mcp', '--vault', tempDir], {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
+
+    // Wait for server to be ready
+    await waitForStderr(proc, 'MCP server ready')
 
     const initRequest = JSON.stringify({
       jsonrpc: '2.0',
@@ -118,10 +149,13 @@ describe('mcp command', () => {
     proc.kill()
   })
 
-  it('should respond to tools/list', async () => {
+  it('should respond to tools/list', { timeout: 30000 }, async () => {
     const proc = spawn('npx', ['tsx', cliPath, 'mcp', '--vault', tempDir], {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
+
+    // Wait for server to be ready
+    await waitForStderr(proc, 'MCP server ready')
 
     // Initialize first
     const initRequest = JSON.stringify({
@@ -167,7 +201,7 @@ describe('mcp command', () => {
     proc.kill()
   })
 
-  it('should handle tools/call', async () => {
+  it('should handle tools/call', { timeout: 30000 }, async () => {
     const proc = spawn('npx', ['tsx', cliPath, 'mcp', '--vault', tempDir], {
       stdio: ['pipe', 'pipe', 'pipe'],
     })

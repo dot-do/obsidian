@@ -886,6 +886,303 @@ export class ObsidianClient {
         this.eventRefs = [];
         this.disposed = true;
     }
+    // ============================================================================
+    // Convenience Methods
+    // ============================================================================
+    /**
+     * Returns recently modified notes synchronously.
+     * @param limit - Maximum number of notes to return (default: 10)
+     * @returns Array of TFile objects sorted by mtime descending
+     */
+    getRecentNotesSync(limit = 10) {
+        this.ensureInitialized();
+        const files = this.vault.getMarkdownFiles();
+        return files.sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, limit);
+    }
+    /**
+     * Returns recently modified notes with their content and metadata.
+     * @param limit - Maximum number of notes to return (default: 10)
+     * @returns Promise resolving to array of NoteWithContent objects
+     */
+    async getRecentNotesWithContent(limit = 10) {
+        this.ensureInitialized();
+        const files = this.getRecentNotesSync(limit);
+        const results = [];
+        for (const file of files) {
+            const content = await this.vault.read(file);
+            const metadata = this.metadataCache.getFileCache(file);
+            results.push({ file, content, metadata });
+        }
+        return results;
+    }
+    /**
+     * Returns notes in a specific folder.
+     * @param folder - Folder path to search in
+     * @param recursive - If true (default), includes notes in subfolders
+     * @returns Array of TFile objects in the folder
+     */
+    getNotesByFolder(folder, recursive = true) {
+        this.ensureInitialized();
+        // Normalize folder path
+        let normalizedFolder = folder.replace(/^\/+|\/+$/g, '');
+        const files = this.vault.getMarkdownFiles();
+        return files.filter(file => {
+            const fileDir = file.path.substring(0, file.path.lastIndexOf('/'));
+            if (recursive) {
+                // Check if file is in folder or any subfolder
+                return file.path.startsWith(normalizedFolder + '/') || fileDir === normalizedFolder;
+            }
+            else {
+                // Only direct children
+                return fileDir === normalizedFolder;
+            }
+        });
+    }
+    /**
+     * Returns notes with a specific tag.
+     * @param tag - Tag to search for (with or without # prefix)
+     * @returns Array of TFile objects with the tag
+     */
+    getNotesByTag(tag) {
+        this.ensureInitialized();
+        // Normalize tag (remove # prefix if present)
+        const normalizedTag = tag.startsWith('#') ? tag.slice(1).toLowerCase() : tag.toLowerCase();
+        const files = this.vault.getMarkdownFiles();
+        return files.filter(file => {
+            const metadata = this.metadataCache.getFileCache(file);
+            const fileTags = this.getFileTags(file, metadata);
+            return fileTags.some(t => t.toLowerCase() === normalizedTag);
+        });
+    }
+    /**
+     * Returns notes matching multiple tags.
+     * @param tags - Array of tags to search for
+     * @param requireAll - If true, notes must have all tags; if false (default), any tag matches
+     * @returns Array of TFile objects matching the tag criteria
+     */
+    getNotesByTags(tags, requireAll = false) {
+        this.ensureInitialized();
+        // Normalize tags
+        const normalizedTags = tags.map(t => t.startsWith('#') ? t.slice(1).toLowerCase() : t.toLowerCase());
+        const files = this.vault.getMarkdownFiles();
+        return files.filter(file => {
+            const metadata = this.metadataCache.getFileCache(file);
+            const fileTags = this.getFileTags(file, metadata).map(t => t.toLowerCase());
+            if (requireAll) {
+                return normalizedTags.every(tag => fileTags.includes(tag));
+            }
+            else {
+                return normalizedTags.some(tag => fileTags.includes(tag));
+            }
+        });
+    }
+    /**
+     * Flexible note filtering with multiple criteria.
+     * @param options - Filter options including folder, tags, limit, and sort settings
+     * @returns Array of TFile objects matching the filter criteria
+     */
+    getNotes(options) {
+        this.ensureInitialized();
+        let files = this.vault.getMarkdownFiles();
+        // Filter by folder
+        if (options.folder) {
+            const normalizedFolder = options.folder.replace(/^\/+|\/+$/g, '');
+            files = files.filter(file => {
+                const fileDir = file.path.substring(0, file.path.lastIndexOf('/'));
+                return file.path.startsWith(normalizedFolder + '/') || fileDir === normalizedFolder;
+            });
+        }
+        // Filter by tags
+        if (options.tags) {
+            const tagsArray = Array.isArray(options.tags) ? options.tags : [options.tags];
+            const normalizedTags = tagsArray.map(t => t.startsWith('#') ? t.slice(1).toLowerCase() : t.toLowerCase());
+            files = files.filter(file => {
+                const metadata = this.metadataCache.getFileCache(file);
+                const fileTags = this.getFileTags(file, metadata).map(t => t.toLowerCase());
+                if (options.requireAllTags) {
+                    return normalizedTags.every(tag => fileTags.includes(tag));
+                }
+                else {
+                    return normalizedTags.some(tag => fileTags.includes(tag));
+                }
+            });
+        }
+        // Sort files
+        const sortBy = options.sortBy ?? 'mtime';
+        const sortOrder = options.sortOrder ?? (sortBy === 'name' ? 'asc' : 'desc');
+        files.sort((a, b) => {
+            let comparison = 0;
+            switch (sortBy) {
+                case 'name':
+                    comparison = a.basename.localeCompare(b.basename);
+                    break;
+                case 'mtime':
+                    comparison = a.stat.mtime - b.stat.mtime;
+                    break;
+                case 'ctime':
+                    comparison = a.stat.ctime - b.stat.ctime;
+                    break;
+                case 'size':
+                    comparison = a.stat.size - b.stat.size;
+                    break;
+            }
+            return sortOrder === 'desc' ? -comparison : comparison;
+        });
+        // Apply limit
+        if (options.limit && options.limit > 0) {
+            files = files.slice(0, options.limit);
+        }
+        return files;
+    }
+    /**
+     * Returns notes with content matching filter criteria.
+     * @param options - Filter options
+     * @returns Promise resolving to array of NoteWithContent objects
+     */
+    async getNotesWithContent(options) {
+        this.ensureInitialized();
+        const files = this.getNotes(options);
+        const results = [];
+        for (const file of files) {
+            const content = await this.vault.read(file);
+            const metadata = this.metadataCache.getFileCache(file);
+            results.push({ file, content, metadata });
+        }
+        return results;
+    }
+    /**
+     * Returns all unique tags in the vault, sorted alphabetically.
+     * @returns Array of tag strings (without # prefix)
+     */
+    getAllTags() {
+        this.ensureInitialized();
+        const tags = new Set();
+        const files = this.vault.getMarkdownFiles();
+        for (const file of files) {
+            const metadata = this.metadataCache.getFileCache(file);
+            const fileTags = this.getFileTags(file, metadata);
+            for (const tag of fileTags) {
+                tags.add(tag);
+            }
+        }
+        return [...tags].sort();
+    }
+    /**
+     * Returns all unique folders in the vault, sorted alphabetically.
+     * @returns Array of folder paths
+     */
+    getAllFolders() {
+        this.ensureInitialized();
+        const folders = new Set();
+        const files = this.vault.getMarkdownFiles();
+        for (const file of files) {
+            const lastSlash = file.path.lastIndexOf('/');
+            if (lastSlash > 0) {
+                const folder = file.path.substring(0, lastSlash);
+                // Add all parent folders too
+                const parts = folder.split('/');
+                let current = '';
+                for (const part of parts) {
+                    current = current ? `${current}/${part}` : part;
+                    folders.add(current);
+                }
+            }
+        }
+        return [...folders].sort();
+    }
+    /**
+     * Checks if a note exists at the given path.
+     * @param path - The vault-relative path to check
+     * @returns True if the note exists
+     */
+    hasNote(path) {
+        this.ensureInitialized();
+        return this.vault.getFileByPath(path) !== null;
+    }
+    /**
+     * Returns notes that have no incoming or outgoing links (orphans).
+     * @returns Array of TFile objects with no links
+     */
+    getOrphanNotes() {
+        this.ensureInitialized();
+        const files = this.vault.getMarkdownFiles();
+        return files.filter(file => {
+            const outlinks = this.graph.getOutlinks(file.path);
+            const backlinks = this.graph.getBacklinks(file.path);
+            return outlinks.length === 0 && backlinks.length === 0;
+        });
+    }
+    /**
+     * Returns files that link to the specified note.
+     * @param path - The vault-relative path to the note
+     * @returns Array of TFile objects that link to the note
+     */
+    getBacklinksFor(path) {
+        this.ensureInitialized();
+        const backlinkPaths = this.graph.getBacklinks(path);
+        const result = [];
+        for (const blPath of backlinkPaths) {
+            const file = this.vault.getFileByPath(blPath);
+            if (file) {
+                result.push(file);
+            }
+        }
+        return result;
+    }
+    /**
+     * Returns files that the specified note links to.
+     * @param path - The vault-relative path to the note
+     * @returns Array of TFile objects that the note links to
+     */
+    getOutlinksFor(path) {
+        this.ensureInitialized();
+        const outlinkPaths = this.graph.getOutlinks(path);
+        const result = [];
+        for (const olPath of outlinkPaths) {
+            const file = this.vault.getFileByPath(olPath);
+            if (file) {
+                result.push(file);
+            }
+        }
+        return result;
+    }
+    /**
+     * Deletes a note from the vault.
+     * @param path - The vault-relative path to the note
+     * @returns This client instance for method chaining
+     * @throws Error if file not found
+     */
+    async deleteNote(path) {
+        this.ensureInitialized();
+        this.ensureNotDisposed();
+        const file = this.vault.getFileByPath(path);
+        if (!file) {
+            throw new Error(`File not found: ${path}`);
+        }
+        await this.vault.delete(file);
+        return this;
+    }
+    /**
+     * Renames a note in the vault.
+     * @param oldPath - Current vault-relative path to the note
+     * @param newPath - New vault-relative path for the note
+     * @returns This client instance for method chaining
+     * @throws Error if source file not found or destination already exists
+     */
+    async renameNote(oldPath, newPath) {
+        this.ensureInitialized();
+        this.ensureNotDisposed();
+        const file = this.vault.getFileByPath(oldPath);
+        if (!file) {
+            throw new Error(`File not found: ${oldPath}`);
+        }
+        const existingFile = this.vault.getFileByPath(newPath);
+        if (existingFile) {
+            throw new Error(`File already exists: ${newPath}`);
+        }
+        await this.vault.rename(file, newPath);
+        return this;
+    }
 }
 /**
  * Parse frontmatter from markdown content.

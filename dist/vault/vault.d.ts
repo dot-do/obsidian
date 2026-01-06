@@ -1,6 +1,38 @@
 import type { Backend, TFile, TFolder, TAbstractFile } from '../types.js';
 import { Events } from './events.js';
 /**
+ * Options for configuring the Vault's caching behavior.
+ */
+export interface VaultOptions {
+    /** Maximum number of file contents to cache (default: 500) */
+    contentCacheSize?: number;
+    /** Maximum number of file metadata entries to cache (default: 5000) */
+    fileCacheSize?: number;
+    /** Whether to enable debouncing of file watch events (default: false) */
+    enableWatchDebounce?: boolean;
+    /** Debounce delay in milliseconds for file watch events (default: 100) */
+    watchDebounceMs?: number;
+}
+/**
+ * Cache statistics for monitoring vault performance.
+ */
+export interface CacheStats {
+    contentCache: {
+        size: number;
+        capacity: number;
+    };
+    fileCache: {
+        size: number;
+        capacity: number;
+    };
+    folderCache: {
+        size: number;
+    };
+    pathToParentCache: {
+        size: number;
+    };
+}
+/**
  * Vault provides file management for an Obsidian-compatible vault.
  * Wraps a backend storage system and provides caching, event emission, and folder management.
  */
@@ -9,15 +41,18 @@ export declare class Vault extends Events {
     private fileCache;
     private folderCache;
     private contentCache;
+    private pathToParentCache;
     private syncScanned;
     private backendCreatesInProgress;
     private backendModifiesInProgress;
     private backendDeletesInProgress;
+    private options;
     /**
      * Creates a new Vault instance.
      * @param backend - The storage backend to use (filesystem, memory, or REST).
+     * @param options - Optional configuration for caching behavior.
      */
-    constructor(backend: Backend);
+    constructor(backend: Backend, options?: VaultOptions);
     private setupBackendListeners;
     private refreshFileSync;
     private createTFile;
@@ -138,5 +173,20 @@ export declare class Vault extends Events {
      * @throws Error if target path already exists.
      */
     copy(file: TFile, newPath: string): Promise<TFile>;
+    /**
+     * Gets cache statistics for monitoring vault performance.
+     * @returns An object containing size and capacity information for all caches.
+     */
+    getCacheStats(): CacheStats;
+    /**
+     * Clears all caches in the vault.
+     * This includes file cache, folder cache, content cache, and path-to-parent cache.
+     */
+    clearCaches(): void;
+    /**
+     * Clears only the content cache.
+     * File and folder metadata caches are preserved.
+     */
+    clearContentCache(): void;
 }
 //# sourceMappingURL=vault.d.ts.map

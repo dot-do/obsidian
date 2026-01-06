@@ -2,8 +2,8 @@ import type { Backend, TFile, CachedMetadata, EventRef, EventCallback } from '..
 import { Vault } from '../vault/vault.js';
 import { MetadataCache } from '../metadata/cache.js';
 import { Graph } from '../graph/graph.js';
-export type { Note, NoteResult, ContextOptions, VaultContext, GenerateContextOptions, QueryContextOptions, } from './types.js';
-import type { NoteResult, ContextOptions, VaultContext, GenerateContextOptions, QueryContextOptions } from './types.js';
+export type { Note, NoteResult, ContextOptions, VaultContext, GenerateContextOptions, QueryContextOptions, NoteFilterOptions, NoteWithContent, } from './types.js';
+import type { NoteResult, ContextOptions, VaultContext, GenerateContextOptions, QueryContextOptions, NoteFilterOptions, NoteWithContent } from './types.js';
 export type VaultBackend = Backend;
 /**
  * Client options for creating an ObsidianClient.
@@ -225,6 +225,98 @@ export declare class ObsidianClient {
      * After calling dispose(), the client should not be used.
      */
     dispose(): void;
+    /**
+     * Returns recently modified notes synchronously.
+     * @param limit - Maximum number of notes to return (default: 10)
+     * @returns Array of TFile objects sorted by mtime descending
+     */
+    getRecentNotesSync(limit?: number): TFile[];
+    /**
+     * Returns recently modified notes with their content and metadata.
+     * @param limit - Maximum number of notes to return (default: 10)
+     * @returns Promise resolving to array of NoteWithContent objects
+     */
+    getRecentNotesWithContent(limit?: number): Promise<NoteWithContent[]>;
+    /**
+     * Returns notes in a specific folder.
+     * @param folder - Folder path to search in
+     * @param recursive - If true (default), includes notes in subfolders
+     * @returns Array of TFile objects in the folder
+     */
+    getNotesByFolder(folder: string, recursive?: boolean): TFile[];
+    /**
+     * Returns notes with a specific tag.
+     * @param tag - Tag to search for (with or without # prefix)
+     * @returns Array of TFile objects with the tag
+     */
+    getNotesByTag(tag: string): TFile[];
+    /**
+     * Returns notes matching multiple tags.
+     * @param tags - Array of tags to search for
+     * @param requireAll - If true, notes must have all tags; if false (default), any tag matches
+     * @returns Array of TFile objects matching the tag criteria
+     */
+    getNotesByTags(tags: string[], requireAll?: boolean): TFile[];
+    /**
+     * Flexible note filtering with multiple criteria.
+     * @param options - Filter options including folder, tags, limit, and sort settings
+     * @returns Array of TFile objects matching the filter criteria
+     */
+    getNotes(options: NoteFilterOptions): TFile[];
+    /**
+     * Returns notes with content matching filter criteria.
+     * @param options - Filter options
+     * @returns Promise resolving to array of NoteWithContent objects
+     */
+    getNotesWithContent(options: NoteFilterOptions): Promise<NoteWithContent[]>;
+    /**
+     * Returns all unique tags in the vault, sorted alphabetically.
+     * @returns Array of tag strings (without # prefix)
+     */
+    getAllTags(): string[];
+    /**
+     * Returns all unique folders in the vault, sorted alphabetically.
+     * @returns Array of folder paths
+     */
+    getAllFolders(): string[];
+    /**
+     * Checks if a note exists at the given path.
+     * @param path - The vault-relative path to check
+     * @returns True if the note exists
+     */
+    hasNote(path: string): boolean;
+    /**
+     * Returns notes that have no incoming or outgoing links (orphans).
+     * @returns Array of TFile objects with no links
+     */
+    getOrphanNotes(): TFile[];
+    /**
+     * Returns files that link to the specified note.
+     * @param path - The vault-relative path to the note
+     * @returns Array of TFile objects that link to the note
+     */
+    getBacklinksFor(path: string): TFile[];
+    /**
+     * Returns files that the specified note links to.
+     * @param path - The vault-relative path to the note
+     * @returns Array of TFile objects that the note links to
+     */
+    getOutlinksFor(path: string): TFile[];
+    /**
+     * Deletes a note from the vault.
+     * @param path - The vault-relative path to the note
+     * @returns This client instance for method chaining
+     * @throws Error if file not found
+     */
+    deleteNote(path: string): Promise<this>;
+    /**
+     * Renames a note in the vault.
+     * @param oldPath - Current vault-relative path to the note
+     * @param newPath - New vault-relative path for the note
+     * @returns This client instance for method chaining
+     * @throws Error if source file not found or destination already exists
+     */
+    renameNote(oldPath: string, newPath: string): Promise<this>;
 }
 /**
  * Parse frontmatter from markdown content.

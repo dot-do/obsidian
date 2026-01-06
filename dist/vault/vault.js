@@ -1,24 +1,36 @@
 import { Events } from './events.js';
+import { LRUCache } from './lru-cache.js';
 /**
  * Vault provides file management for an Obsidian-compatible vault.
  * Wraps a backend storage system and provides caching, event emission, and folder management.
  */
 export class Vault extends Events {
     backend;
-    fileCache = new Map();
+    fileCache;
     folderCache = new Map();
-    contentCache = new Map();
+    contentCache;
+    pathToParentCache = new Map();
     syncScanned = false;
     backendCreatesInProgress = new Set();
     backendModifiesInProgress = new Set();
     backendDeletesInProgress = new Set();
+    options;
     /**
      * Creates a new Vault instance.
      * @param backend - The storage backend to use (filesystem, memory, or REST).
+     * @param options - Optional configuration for caching behavior.
      */
-    constructor(backend) {
+    constructor(backend, options = {}) {
         super();
         this.backend = backend;
+        this.options = {
+            contentCacheSize: options.contentCacheSize ?? 500,
+            fileCacheSize: options.fileCacheSize ?? 5000,
+            enableWatchDebounce: options.enableWatchDebounce ?? false,
+            watchDebounceMs: options.watchDebounceMs ?? 100
+        };
+        this.fileCache = new LRUCache(this.options.fileCacheSize);
+        this.contentCache = new LRUCache(this.options.contentCacheSize);
         // Listen to backend events if supported
         this.setupBackendListeners();
     }
@@ -173,6 +185,8 @@ export class Vault extends Events {
             if (parent && !parent.children.some(c => c.path === file.path)) {
                 parent.children.push(file);
             }
+            // Cache the parent path
+            this.pathToParentCache.set(file.path, parentPath);
         }
         // Add folders to their parent folders
         for (const folder of this.folderCache.values()) {
@@ -183,6 +197,8 @@ export class Vault extends Events {
             if (parent && !parent.children.some(c => c.path === folder.path)) {
                 parent.children.push(folder);
             }
+            // Cache the parent path
+            this.pathToParentCache.set(folder.path, parentPath);
         }
     }
     /**
@@ -454,6 +470,8 @@ export class Vault extends Events {
         try {
             await this.backend.delete(file.path);
             this.fileCache.delete(file.path);
+            // Invalidate content cache
+            this.contentCache.delete(file.path);
             // Remove from parent folder
             const parentPath = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '';
             const parent = this.folderCache.get(parentPath);
@@ -544,6 +562,46 @@ export class Vault extends Events {
         finally {
             this.backendCreatesInProgress.delete(newPath);
         }
+    }
+    /**
+     * Gets cache statistics for monitoring vault performance.
+     * @returns An object containing size and capacity information for all caches.
+     */
+    getCacheStats() {
+        return {
+            contentCache: {
+                size: this.contentCache.size,
+                capacity: this.contentCache.capacity
+            },
+            fileCache: {
+                size: this.fileCache.size,
+                capacity: this.fileCache.capacity
+            },
+            folderCache: {
+                size: this.folderCache.size
+            },
+            pathToParentCache: {
+                size: this.pathToParentCache.size
+            }
+        };
+    }
+    /**
+     * Clears all caches in the vault.
+     * This includes file cache, folder cache, content cache, and path-to-parent cache.
+     */
+    clearCaches() {
+        this.fileCache.clear();
+        this.folderCache.clear();
+        this.contentCache.clear();
+        this.pathToParentCache.clear();
+        this.syncScanned = false;
+    }
+    /**
+     * Clears only the content cache.
+     * File and folder metadata caches are preserved.
+     */
+    clearContentCache() {
+        this.contentCache.clear();
     }
 }
 //# sourceMappingURL=vault.js.map

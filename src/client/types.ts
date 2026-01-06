@@ -123,3 +123,34 @@ export interface GeneratedVaultContext {
   /** Graph statistics */
   graphStats: ContextGraphStats
 }
+
+// ============================================================================
+// Note Filtering Options
+// ============================================================================
+
+/**
+ * Options for filtering notes in getNotes and getNotesWithContent methods.
+ */
+export interface NoteFilterOptions {
+  /** Filter by folder path (recursive by default) */
+  folder?: string
+  /** Filter by tag(s) - can be a single tag or array of tags */
+  tags?: string | string[]
+  /** If true, require all tags to match (default: false - any tag matches) */
+  requireAllTags?: boolean
+  /** Maximum number of notes to return */
+  limit?: number
+  /** Sort by field (default: 'mtime') */
+  sortBy?: 'name' | 'mtime' | 'ctime' | 'size'
+  /** Sort order (default: 'desc' for mtime, 'asc' for name) */
+  sortOrder?: 'asc' | 'desc'
+}
+
+/**
+ * Result from getNotesWithContent method.
+ */
+export interface NoteWithContent {
+  file: TFile
+  content: string
+  metadata: CachedMetadata | null
+}

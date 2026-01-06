@@ -418,11 +418,14 @@ export function createCli() {
         try {
             const { main: serveMain } = await import('./serve.js');
             const vaultPath = options.vault || process.env.OBSIDIAN_VAULT || process.cwd();
-            await serveMain([], {
+            const exitCode = await serveMain([], {
                 vault: vaultPath,
                 port: String(options.port || 3000),
                 host: options.host || '127.0.0.1'
             });
+            if (exitCode !== 0) {
+                process.exit(exitCode);
+            }
         }
         catch (error) {
             console.error(`Error: ${error.message}`);
