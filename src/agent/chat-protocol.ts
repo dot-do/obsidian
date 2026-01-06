@@ -3,19 +3,18 @@
  *
  * Defines the WebSocket message protocol between the Obsidian plugin
  * Chat View (client) and the Agent Server (server).
- *
- * STUB: All exports throw "Not implemented" for TDD RED phase.
  */
 
 import { z } from 'zod'
 
+// ============================================================================
 // Client Message Types
+// ============================================================================
 
 export interface ChatMessage {
   type: 'chat'
   conversationId: string
-  content: string
-  timestamp: number
+  message: string
 }
 
 export interface CancelMessage {
@@ -25,56 +24,55 @@ export interface CancelMessage {
 
 export interface NewConversationMessage {
   type: 'new_conversation'
-  conversationId: string
-  timestamp: number
 }
 
 export type ClientMessage = ChatMessage | CancelMessage | NewConversationMessage
 
+// ============================================================================
 // Server Message Types
+// ============================================================================
 
 export interface TextDeltaMessage {
   type: 'text_delta'
   conversationId: string
-  delta: string
-  messageId: string
+  text: string
 }
 
 export interface ToolStartMessage {
   type: 'tool_start'
   conversationId: string
-  messageId: string
-  toolName: string
-  toolInput: unknown
+  toolUseId: string
+  name: string
+  input: unknown
 }
 
 export interface ToolResultMessage {
   type: 'tool_result'
   conversationId: string
-  messageId: string
-  toolName: string
-  result: unknown
-  error?: string
+  toolUseId: string
+  output: unknown
+  isError: boolean
 }
 
 export interface CompleteMessage {
   type: 'complete'
   conversationId: string
-  messageId: string
-  totalTokens?: number
+  usage: {
+    inputTokens: number
+    outputTokens: number
+  }
 }
 
 export interface ErrorMessage {
   type: 'error'
   conversationId: string
-  code: string
   message: string
+  code?: string
 }
 
 export interface ConnectedMessage {
   type: 'connected'
-  version: string
-  capabilities: string[]
+  conversationId: string
 }
 
 export type ServerMessage =
@@ -85,46 +83,252 @@ export type ServerMessage =
   | ErrorMessage
   | ConnectedMessage
 
-// Zod Schemas - STUBS
+// ============================================================================
+// Zod Schemas
+// ============================================================================
 
-export const ChatMessageSchema: z.ZodType<ChatMessage> = z.any() as z.ZodType<ChatMessage>
-export const CancelMessageSchema: z.ZodType<CancelMessage> = z.any() as z.ZodType<CancelMessage>
-export const NewConversationMessageSchema: z.ZodType<NewConversationMessage> = z.any() as z.ZodType<NewConversationMessage>
-export const ClientMessageSchema: z.ZodType<ClientMessage> = z.any() as z.ZodType<ClientMessage>
-export const TextDeltaMessageSchema: z.ZodType<TextDeltaMessage> = z.any() as z.ZodType<TextDeltaMessage>
-export const ToolStartMessageSchema: z.ZodType<ToolStartMessage> = z.any() as z.ZodType<ToolStartMessage>
-export const ToolResultMessageSchema: z.ZodType<ToolResultMessage> = z.any() as z.ZodType<ToolResultMessage>
-export const CompleteMessageSchema: z.ZodType<CompleteMessage> = z.any() as z.ZodType<CompleteMessage>
-export const ErrorMessageSchema: z.ZodType<ErrorMessage> = z.any() as z.ZodType<ErrorMessage>
-export const ConnectedMessageSchema: z.ZodType<ConnectedMessage> = z.any() as z.ZodType<ConnectedMessage>
-export const ServerMessageSchema: z.ZodType<ServerMessage> = z.any() as z.ZodType<ServerMessage>
+export const ChatMessageSchema = z
+  .object({
+    type: z.literal('chat'),
+    conversationId: z.string(),
+    message: z.string(),
+  })
+  .strict()
+  .transform((data) => ({
+    type: data.type,
+    conversationId: data.conversationId,
+    message: data.message,
+  }))
 
-// Utility Functions - STUBS
+export const CancelMessageSchema = z
+  .object({
+    type: z.literal('cancel'),
+    conversationId: z.string(),
+  })
+  .strict()
+  .transform((data) => ({
+    type: data.type,
+    conversationId: data.conversationId,
+  }))
 
-export function parseClientMessage(_data: string): ClientMessage {
-  throw new Error('Not implemented')
+export const NewConversationMessageSchema = z
+  .object({
+    type: z.literal('new_conversation'),
+  })
+  .passthrough()
+  .transform((data) => ({
+    type: data.type as 'new_conversation',
+  }))
+
+export const ClientMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('chat'),
+    conversationId: z.string(),
+    message: z.string(),
+  }),
+  z.object({
+    type: z.literal('cancel'),
+    conversationId: z.string(),
+  }),
+  z.object({
+    type: z.literal('new_conversation'),
+  }),
+])
+
+export const TextDeltaMessageSchema = z
+  .object({
+    type: z.literal('text_delta'),
+    conversationId: z.string(),
+    text: z.string(),
+  })
+  .strict()
+
+export const ToolStartMessageSchema = z
+  .object({
+    type: z.literal('tool_start'),
+    conversationId: z.string(),
+    toolUseId: z.string(),
+    name: z.string(),
+    input: z.unknown(),
+  })
+  .strict()
+
+export const ToolResultMessageSchema = z
+  .object({
+    type: z.literal('tool_result'),
+    conversationId: z.string(),
+    toolUseId: z.string(),
+    output: z.unknown(),
+    isError: z.boolean(),
+  })
+  .strict()
+
+const UsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+})
+
+export const CompleteMessageSchema = z
+  .object({
+    type: z.literal('complete'),
+    conversationId: z.string(),
+    usage: UsageSchema,
+  })
+  .strict()
+
+export const ErrorMessageSchema = z
+  .object({
+    type: z.literal('error'),
+    conversationId: z.string(),
+    message: z.string(),
+    code: z.string().optional(),
+  })
+  .strict()
+
+export const ConnectedMessageSchema = z
+  .object({
+    type: z.literal('connected'),
+    conversationId: z.string(),
+  })
+  .strict()
+
+export const ServerMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('text_delta'),
+    conversationId: z.string(),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal('tool_start'),
+    conversationId: z.string(),
+    toolUseId: z.string(),
+    name: z.string(),
+    input: z.unknown(),
+  }),
+  z.object({
+    type: z.literal('tool_result'),
+    conversationId: z.string(),
+    toolUseId: z.string(),
+    output: z.unknown(),
+    isError: z.boolean(),
+  }),
+  z.object({
+    type: z.literal('complete'),
+    conversationId: z.string(),
+    usage: UsageSchema,
+  }),
+  z.object({
+    type: z.literal('error'),
+    conversationId: z.string(),
+    message: z.string(),
+    code: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal('connected'),
+    conversationId: z.string(),
+  }),
+])
+
+// ============================================================================
+// Serialization Functions
+// ============================================================================
+
+/**
+ * Parse a JSON string into a validated ClientMessage
+ */
+export function parseClientMessage(data: string): ClientMessage {
+  const parsed = JSON.parse(data)
+  const result = ClientMessageSchema.safeParse(parsed)
+  if (!result.success) {
+    throw new Error(`Invalid client message: ${result.error.message}`)
+  }
+  return result.data as ClientMessage
 }
 
-export function parseServerMessage(_data: string): ServerMessage {
-  throw new Error('Not implemented')
+/**
+ * Parse a JSON string into a validated ServerMessage
+ */
+export function parseServerMessage(data: string): ServerMessage {
+  const parsed = JSON.parse(data)
+  const result = ServerMessageSchema.safeParse(parsed)
+  if (!result.success) {
+    throw new Error(`Invalid server message: ${result.error.message}`)
+  }
+  return result.data as ServerMessage
 }
 
-export function serializeClientMessage(_message: ClientMessage): string {
-  throw new Error('Not implemented')
+/**
+ * Serialize a ClientMessage to a JSON string
+ */
+export function serializeClientMessage(message: ClientMessage): string {
+  return JSON.stringify(message)
 }
 
-export function serializeServerMessage(_message: ServerMessage): string {
-  throw new Error('Not implemented')
+/**
+ * Serialize a ServerMessage to a JSON string
+ */
+export function serializeServerMessage(message: ServerMessage): string {
+  return JSON.stringify(message)
 }
 
+// ============================================================================
+// Conversation ID Utilities
+// ============================================================================
+
+// Valid conversation ID pattern: must start with "conv-" followed by alphanumeric, dash, or underscore characters
+const CONVERSATION_ID_PATTERN = /^conv-[a-zA-Z0-9_-]+$/
+const MIN_CONVERSATION_ID_LENGTH = 8
+const MAX_CONVERSATION_ID_LENGTH = 255
+
+/**
+ * Generate a unique conversation ID with UUID v4 format
+ */
 export function generateConversationId(): string {
-  throw new Error('Not implemented')
+  // Generate UUID v4 format
+  const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+  return `conv-${uuid}`
 }
 
-export function validateConversationId(_id: string): void {
-  throw new Error('Not implemented')
+/**
+ * Validate a conversation ID, throwing an error if invalid
+ */
+export function validateConversationId(id: unknown): void {
+  if (typeof id !== 'string') {
+    throw new Error('Conversation ID must be a string')
+  }
+  if (id.length === 0) {
+    throw new Error('Conversation ID cannot be empty')
+  }
+  if (id.length < MIN_CONVERSATION_ID_LENGTH) {
+    throw new Error(`Conversation ID must be at least ${MIN_CONVERSATION_ID_LENGTH} characters`)
+  }
+  if (id.length > MAX_CONVERSATION_ID_LENGTH) {
+    throw new Error(`Conversation ID cannot exceed ${MAX_CONVERSATION_ID_LENGTH} characters`)
+  }
+  if (!id.startsWith('conv-')) {
+    throw new Error('Conversation ID must start with "conv-"')
+  }
+  if (!CONVERSATION_ID_PATTERN.test(id)) {
+    throw new Error('Conversation ID contains invalid characters')
+  }
 }
 
-export function isValidConversationId(_id: string): boolean {
-  throw new Error('Not implemented')
+/**
+ * Check if a conversation ID is valid without throwing
+ */
+export function isValidConversationId(id: unknown): boolean {
+  if (typeof id !== 'string') {
+    return false
+  }
+  if (id.length < MIN_CONVERSATION_ID_LENGTH) {
+    return false
+  }
+  if (id.length > MAX_CONVERSATION_ID_LENGTH) {
+    return false
+  }
+  return CONVERSATION_ID_PATTERN.test(id)
 }
