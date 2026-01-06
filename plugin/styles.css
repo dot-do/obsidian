@@ -1,0 +1,16 @@
+/* Obsidian Bridge Plugin Styles */
+
+.bridge-status {
+  padding: 12px;
+  margin-bottom: 16px;
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+}
+
+.bridge-status-running {
+  color: var(--text-success);
+}
+
+.bridge-status-stopped {
+  color: var(--text-muted);
+}

@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-bridge",
+  "name": "Obsidian Bridge",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Exposes Obsidian APIs via WebSocket for external tools (CLI, MCP, Claude Code)",
+  "author": "dot-do",
+  "authorUrl": "https://github.com/dot-do",
+  "isDesktopOnly": true
+}
